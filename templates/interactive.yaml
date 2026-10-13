@@ -1,0 +1,22 @@
+apiVersion: openshell.managed.openshift.io/v1alpha1
+kind: Sandbox
+metadata:
+  name: ${NAME}
+spec:
+  image: quay.io/redhat-services-prod/rosa-tenant/rosa-agent/rosa-agent:latest
+  command:
+    - claude
+    - --dangerously-skip-permissions
+    - ${PROMPT}
+  providerRefs:
+    - name: rosa-general-vertex
+    - name: rosa-agent-github
+    - name: rosa-agent-jira
+  env:
+    ANTHROPIC_BASE_URL: https://inference.local
+    ANTHROPIC_API_KEY: unused
+    JIRA_EMAIL: sd-sre-platform+rosa-agent@redhat.com
+    JIRA_BASE_URL: https://redhat.atlassian.net
+  sessionOpts:
+    noKeep: true
+  tty: true
