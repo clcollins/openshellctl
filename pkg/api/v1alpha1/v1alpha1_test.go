@@ -207,6 +207,7 @@ spec:
 	so := s.Spec.SessionOpts
 	if so == nil {
 		t.Fatal("sessionOpts is nil")
+		return // unreachable; makes the nil check provable to static analysis (SA5011)
 	}
 	if !so.NoKeep {
 		t.Error("sessionOpts.noKeep should be true")

@@ -290,6 +290,11 @@ openshellctl sandbox create --from ghcr.io/org/image:tag
 openshellctl sandbox create -f sandbox.yaml
 cat sandbox.yaml | openshellctl sandbox create -f -
 
+# Create from a templated manifest file (see "Manifest template parameters")
+openshellctl sandbox create -f sandbox.yaml \
+  -p NAME=my-run \
+  -p PROMPT="retrieve and implement ROSAENG-74244"
+
 # Create with uploads and port forwarding
 openshellctl sandbox create --from python \
   --upload ./src:/workspace \
@@ -314,6 +319,10 @@ openshellctl sandbox create --from python -o json
 | `--from` | Image reference or community name (e.g. `python`, `pytorch`) |
 | `--name` | Sandbox name (auto-generated if omitted; max 19 chars) |
 | `-f`, `--file` | Manifest YAML file (`-` for stdin) |
+| `-p`, `--param` | Template parameter `KEY=VALUE`, substituted for `${KEY}` in the `-f` manifest (repeatable) |
+| `--param-file` | File of `KEY=VALUE` template parameters, one per line, `#` comments allowed (repeatable) |
+| `--parameters` | Print the `-f` manifest's `${KEY}` parameter names, one per line, and exit without creating anything |
+| `--ignore-unknown-parameters` | Do not error when `--param`/`--param-file` supplies a key the manifest does not reference |
 | `--gpu [COUNT]` | Request GPU resources (bare = driver default, or specify count) |
 | `--cpu` | CPU request (e.g. `500m`, `2`) |
 | `--memory` | Memory request (e.g. `1Gi`, `512Mi`) |
@@ -399,6 +408,49 @@ openshellctl sandbox delete -f sop-improve.yaml
 These fields are ignored by the operator — they control what the CLI does before and after creation (`replace`/`replaceTimeout` run before; the rest run after). CLI flags always override manifest values.
 
 **`spec.policy`** (inline map) and **`spec.policyFile`** (path string) are mutually exclusive. `spec.policyFile` is resolved relative to the manifest file's directory; when the manifest is read from stdin, `policyFile` must be an absolute path.
+
+#### Manifest template parameters
+
+A manifest can declare `${KEY}` references anywhere in a string value (not in map keys), and `sandbox create -f` substitutes them before the manifest is validated — mirroring `oc process`'s `${PARAMETER_NAME}` convention. This is for the handful of values that are *not* stable run-to-run: a reused manifest's `metadata.name` (which must be unique per workspace) and the prompt passed to a long-running agent command, for example:
+
+```yaml
+# sandbox.yaml
+apiVersion: openshell.managed.openshift.io/v1alpha1
+kind: Sandbox
+metadata:
+  name: ${NAME}
+spec:
+  image: quay.io/redhat-services-prod/rosa-tenant/rosa-agent/rosa-agent:latest
+  command:
+    - claude
+    - --dangerously-skip-permissions
+    - "${PROMPT}"
+```
+
+```bash
+openshellctl sandbox create -f sandbox.yaml \
+  -p NAME=my-run \
+  -p PROMPT="retrieve and implement ROSAENG-74244"
+
+# One KEY=VALUE per line instead of repeated -p; '#' comments and blank
+# lines are ignored. A -p value always overrides the same key from a file
+# (with a warning); a later --param-file overrides an earlier one.
+openshellctl sandbox create -f sandbox.yaml --param-file params.txt
+
+# List the manifest's parameter names (sorted) without creating anything.
+openshellctl sandbox create -f sandbox.yaml --parameters
+```
+
+Rules:
+
+- `KEY` matches `[A-Za-z_][A-Za-z0-9_]*`; a reference may appear more than once and may be embedded in literal text (e.g. `"${NAME}-worker"`).
+- Every `${KEY}` left unresolved after substitution is an error listing every missing key — a literal `${KEY}` is never sent to the gateway. This applies even with **no** `-p`/`--param-file` given at all: a manifest containing a real `${KEY}` reference always needs it resolved, the same tradeoff `oc process` makes for any `${PARAMETER}` with no declared default (this card has no `parameters:`/defaults block).
+- A `-p`/`--param-file` key the manifest does not reference is an error unless `--ignore-unknown-parameters` is set.
+- `$KEY` (no braces) and `$${KEY}` are never substituted — `$${KEY}` is the literal text `$${KEY}` in the output; there is no other escape mechanism.
+- A manifest with no `${...}` references at all, and no `-p`/`--param-file`/`--parameters` given, behaves exactly as without this feature (no YAML re-serialization, so original formatting/comments are untouched).
+- Substitution only reaches string-valued scalars. A non-string field (e.g. `spec.resources.cpu`, `sessionOpts.noKeep`) keeps its `${KEY}` text as a literal string after substitution — `cpu: "${CPU}"` decodes as the string `"2"` (fine, `cpu` is already a string field), but `noKeep: ${KEEP}` fails manifest decoding, since a boolean field can't hold the substituted string. Template only string fields.
+- `--parameters` cannot be combined with `-p`/`--param-file` — it's a usage error, matching `oc process`'s rejection of the same combination, rather than silently ignoring the supplied values.
+- Substituted values are never logged, at any `-v` verbosity — only parameter *names* ever appear in output or error text.
 
 ### `sandbox get`
 

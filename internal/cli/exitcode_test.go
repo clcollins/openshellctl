@@ -8,6 +8,7 @@ import (
 	"github.com/openshift-online/openshellctl/pkg/doctor"
 	"github.com/openshift-online/openshellctl/pkg/gateway"
 	"github.com/openshift-online/openshellctl/pkg/gatewayconfig"
+	"github.com/openshift-online/openshellctl/pkg/paramtemplate"
 	"github.com/openshift-online/openshellctl/pkg/sandbox"
 	"github.com/openshift-online/openshellctl/pkg/vaultconfig"
 )
@@ -23,6 +24,15 @@ func TestExitCodeFor(t *testing.T) {
 		{"usage error", &UsageError{Err: errors.New("bad flag")}, ExitUsage},
 		{"wrapped usage error", errWrap(&UsageError{Err: errors.New("bad flag")}), ExitUsage},
 		{"not implemented is generic", &NotImplementedError{Command: "create"}, ExitError},
+
+		// paramtemplate typed errors (ROSAENG-74244) — the CLI layer always
+		// wraps these in *UsageError (sandbox_create_params.go), the same
+		// convention every other --param/-f input-validation error in this
+		// package already follows, so they map to ExitUsage like the rest.
+		{"malformed --param → usage", &UsageError{Err: &paramtemplate.MalformedParamError{Key: "1BAD", HasEquals: true, Source: "--param"}}, ExitUsage},
+		{"unreadable --param-file → usage", &UsageError{Err: &paramtemplate.ParamFileUnreadableError{Path: "p.txt", Err: errors.New("no such file")}}, ExitUsage},
+		{"unresolved parameter reference → usage", &UsageError{Err: &paramtemplate.UnresolvedParamsError{Keys: []string{"NAME"}}}, ExitUsage},
+		{"unknown parameter → usage", &UsageError{Err: &paramtemplate.UnknownParamsError{Keys: []string{"EXTRA"}}}, ExitUsage},
 
 		// Gateway typed errors.
 		{"gateway unauthenticated → auth", &gateway.UnauthenticatedError{Message: "no token"}, ExitAuth},

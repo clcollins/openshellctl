@@ -4,7 +4,11 @@
     "create": [
       {"long": "file", "short": "f", "type": "string", "note": "manifest input (- for stdin); docs/plans/0002-openshell-go-client-plan.md:585"},
       {"long": "replace", "type": "bool", "note": "ROSAENG-68832"},
-      {"long": "replace-timeout", "type": "duration", "default": "5m", "note": "ROSAENG-68832"}
+      {"long": "replace-timeout", "type": "duration", "default": "5m", "note": "ROSAENG-68832"},
+      {"long": "param", "short": "p", "type": "stringArray", "repeatable": true, "note": "ROSAENG-74244; oc process --param convention"},
+      {"long": "param-file", "type": "stringArray", "repeatable": true, "note": "ROSAENG-74244; oc process --param-file convention"},
+      {"long": "parameters", "type": "bool", "note": "ROSAENG-74244; oc process --parameters convention"},
+      {"long": "ignore-unknown-parameters", "type": "bool", "note": "ROSAENG-74244; oc process --ignore-unknown-parameters convention"}
     ]
   }
 }
