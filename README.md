@@ -1,6 +1,13 @@
 # openshellctl
 
-Lightweight Go client and CLI for [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) gateways. A pure-Go reimplementation of the upstream Rust CLI that is a full standalone replacement — it does not depend on or shell out to the upstream `openshell` binary. Built for embedding in operators and CI pipelines as a single static binary with zero external dependencies.
+A CLI tool for running sandboxes on [HyperShell](https://github.com/openshift-online/hypershell) — Red Hat's managed [NVIDIA OpenShell](https://github.com/NVIDIA/OpenShell) gateways — from a laptop, a CI job, or a Kubernetes CronJob, with the same YAML manifest in every case.
+
+openshellctl exists because getting an agent sandbox running on HyperShell from automation used to mean a bash prelude: fetch credentials from Vault, write the gateway's `metadata.json`, mint a token, hope it hasn't expired by cleanup time, then hand-assemble a long `sandbox create` command. openshellctl folds all of that into the binary:
+
+- **Sandboxes as code.** A `kind: Sandbox` YAML manifest holds the image, command, providers, env, resources, uploads and session behaviour. `sandbox create -f`, `sandbox delete -f`, `sandbox get -f` and every other `-f` command read the same file, from disk, stdin or an `http(s)://` URL. See [Manifest format](#manifest-format).
+- **Templates, not copies.** Manifests take `${NAME}`/`${PROMPT}`-style parameters filled from `-p KEY=VALUE` or `--param-file`, `oc process` style, so one checked-in template serves every run. Ready-made ones live in [`templates/`](templates/). See [Manifest template parameters](#manifest-template-parameters).
+- **Vault-backed, zero-prelude auth.** Point it at a Vault KV v2 secret and it fills in the gateway endpoint, OIDC issuer, client ID and client secret itself; a service account authenticates with `client_credentials` and the token is checked on every request and re-minted before it expires, so an hour-long job's `--no-keep` cleanup still has a valid token. See [Authentication](#authentication).
+- **Nothing to install alongside it.** Pure Go, single static binary, no shell-out to `openshell`, `ssh`, `tar`, `git` or `vault`. It is a standalone replacement for the upstream Rust CLI, not a wrapper around it, and its `pkg/` packages are importable for operators and controllers.
 
 ## Installation
 
@@ -18,13 +25,55 @@ make build          # binary at ./openshellctl
 
 ## Quick start
 
-Two complete, runnable paths from a clean machine to a working sandbox,
-depending on how you authenticate. Both end with `openshellctl doctor`
-printing all-green — run it any time something looks wrong; see
+Three complete, runnable paths from a clean machine to a working sandbox,
+depending on where your credentials live. The Service account and Human
+account paths below end with `openshellctl doctor` printing all-green; the
+Vault path can be checked the same way by handing `doctor` the same
+`--vault-*` flags. Run `doctor` any time something looks wrong — see
 ["First run: `openshellctl doctor`"](#first-run-openshellctl-doctor) below
 for what a failure looks like and its exact next command. For running these
 same commands from a Kubernetes CronJob instead of a shell, see
 [`docs/ci.md`](docs/ci.md).
+
+### Vault + template (the HyperShell CI path)
+
+The shortest path when the gateway's service-account credentials are already
+in Vault. No `gateway add`, no hand-written `sandbox create` flags: one Vault
+session, one template, two parameters.
+
+```bash
+export VAULT_ADDR=https://vault.example.com
+vault login -method=oidc        # openshellctl reads the resulting token; it never logs in itself
+
+openshellctl --vault-kv-mount secret --vault-kv-path myapp --vault-field-prefix myapp \
+  sandbox create -f templates/noninteractive.yaml \
+  -p NAME=ROSAENG-12345 \
+  -p PROMPT="retrieve and implement ROSAENG-12345" \
+  --no-keep
+```
+
+> **Note:** every `--vault-*` flag above has a Cobra/Viper-style env var
+> equivalent (`OPENSHELL_VAULT_KV_MOUNT`, `OPENSHELL_VAULT_KV_PATH`,
+> `OPENSHELL_VAULT_FIELD_PREFIX` — same pattern as every global flag; see
+> [Global flags](#global-flags)). Export them once per shell or CI job and
+> every later command drops the three flags entirely:
+> ```bash
+> export OPENSHELL_VAULT_KV_MOUNT=secret
+> export OPENSHELL_VAULT_KV_PATH=myapp
+> export OPENSHELL_VAULT_FIELD_PREFIX=myapp
+> openshellctl sandbox create -f templates/noninteractive.yaml -p NAME=... -p PROMPT="..." --no-keep
+> ```
+
+The secret at your `--vault-kv-path` supplies `<prefix>-gateway-endpoint`,
+`<prefix>-oidc-client-id`, `<prefix>-oidc-client-secret` and the rest, where
+`<prefix>` is whatever you pass to `--vault-field-prefix` (`myapp` in
+the example above, but your own mount, path and prefix can be anything);
+anything you set yourself via flag or `OPENSHELL_*` env var still wins. See
+["4. Vault-sourced config"](#4-vault-sourced-config). The template is one of
+two checked in under [`templates/`](templates/) — `interactive.yaml`
+(attach, `noKeep`) and `noninteractive.yaml` (`--print`, `approvalMode:
+auto`) — and `-p` fills its `${NAME}` and `${PROMPT}` placeholders; see
+["Manifest template parameters"](#manifest-template-parameters).
 
 > **Always `export` a credential, never assign it bare.** `VAR=$(...)`
 > (no `export`) sets a shell-local variable openshellctl's child process
@@ -180,21 +229,30 @@ This overrides all other auth methods. The token is used as-is with no refresh �
 
 ### 4. Vault-sourced config
 
-Point openshellctl at a Vault KV v2 secret holding any of the gateway/OIDC
-fields above, instead of exporting them yourself:
+This is how HyperShell service accounts are meant to be used: the gateway's
+endpoint, OIDC issuer, client ID and client secret all sit in one Vault KV v2
+secret, and openshellctl reads them directly. Nothing is exported into the
+shell, nothing is written to disk, and a CronJob needs only a Vault session.
+Point openshellctl at the secret instead of exporting the fields yourself:
 
 ```bash
 vault login -method=oidc   # openshellctl never does this itself — it expects a session to already exist
 
-openshellctl --vault-kv-mount osd-sre --vault-kv-path rosa-agent --vault-field-prefix hypershell \
+openshellctl --vault-kv-mount secret --vault-kv-path myapp --vault-field-prefix myapp \
   sandbox list
+
+# or, once per shell/job, via env vars:
+export OPENSHELL_VAULT_KV_MOUNT=secret
+export OPENSHELL_VAULT_KV_PATH=myapp
+export OPENSHELL_VAULT_FIELD_PREFIX=myapp
+openshellctl sandbox create -f templates/noninteractive.yaml -p NAME=my-run -p PROMPT="..." --no-keep
 ```
 
-This reads the secret at `osd-sre/rosa-agent` and, for each of `gateway`,
+This reads the secret at `secret/myapp` and, for each of `gateway`,
 `gateway-endpoint`, `oidc-issuer`, `oidc-client-id`, `oidc-client-secret`,
 `oidc-audience`, `oidc-scopes`, looks for a field named
-`<prefix>-<field>` (here, `hypershell-oidc-client-id`,
-`hypershell-oidc-client-secret`, and so on) and uses it only where you
+`<prefix>-<field>` (here, `myapp-oidc-client-id`,
+`myapp-oidc-client-secret`, and so on) and uses it only where you
 haven't already set that value via flag or `OPENSHELL_*` env var — Vault is
 always the lowest-priority source, never an override. `--vault-field-prefix`
 is optional; omit it if your secret's fields aren't prefixed.
@@ -879,6 +937,8 @@ See [`docs/troubleshooting.md`](docs/troubleshooting.md) for the common onboardi
 
 openshellctl is a compatible reimplementation with these intentional differences:
 
+- **Sandboxes as code**: `-f` manifests (`kind: Sandbox`), `${KEY}` template parameters with `-p`/`--param-file`, and `http(s)://` manifest URLs are openshellctl-only — the upstream CLI takes everything as flags. See [Manifest format](#manifest-format).
+- **Vault-sourced auth config**: `--vault-kv-mount`/`--vault-kv-path`/`--vault-field-prefix` fill gateway and OIDC settings from a Vault KV v2 secret. See ["4. Vault-sourced config"](#4-vault-sourced-config).
 - **Pure Go, zero dependencies**: no shell-out to `ssh`, `tar`, `git`, or any other binary — including the upstream `openshell` CLI. All SSH transfer, tar streaming, and gitignore filtering are implemented in-process. Single static binary.
 - **Per-request auth with automatic retry**: tokens are resolved per-RPC (not baked in at startup). On `Unauthenticated`, the token is refreshed (or re-minted for service accounts) and the request retried. Long-running sessions and `--no-keep` cleanup work reliably even after token expiry.
 - **Embeddable**: `pkg/gateway`, `pkg/transfer`, `pkg/sandbox`, and `pkg/auth` are importable Go packages with interface-driven I/O seams, suitable for use in operators and controllers.
