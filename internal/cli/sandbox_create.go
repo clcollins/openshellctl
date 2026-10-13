@@ -441,13 +441,7 @@ func resolveTTY(r *sandbox.CreateRequest) bool {
 // calls loadManifestWithParams, with the real --param/--param-file/
 // --parameters/--ignore-unknown-parameters flags.
 func loadManifest(cmd *cobra.Command, path string) (*v1alpha1.Sandbox, error) {
-	var data []byte
-	var err error
-	if path == "-" {
-		data, err = readAll(cmd.InOrStdin())
-	} else {
-		data, err = os.ReadFile(path)
-	}
+	data, err := readManifestBytes(cmd, newManifestHTTPClient(), path)
 	if err != nil {
 		return nil, err
 	}
@@ -470,7 +464,11 @@ func loadPolicy(path string) (*types.SandboxPolicy, error) {
 // resolveManifestPolicy converts a manifest's spec.policy (inline) or
 // spec.policyFile (path) to the SDK type. Returns nil when neither is set.
 // The policyFile path is resolved relative to the manifest file's directory.
-// When the manifest is read from stdin, policyFile must be an absolute path.
+// When the manifest is read from stdin OR from a URL, policyFile must be an
+// absolute path: there is no local directory to resolve a relative path
+// against (filepath.Join(filepath.Dir(manifestPath), path) against a URL
+// would silently produce a garbage local path, not an error), so a URL
+// manifest gets the same treatment stdin already does.
 func resolveManifestPolicy(m *v1alpha1.Sandbox, manifestPath string) (*types.SandboxPolicy, error) {
 	if m.Spec.Policy != nil {
 		p, err := policyyaml.ParseInline(m.Spec.Policy)
@@ -482,8 +480,11 @@ func resolveManifestPolicy(m *v1alpha1.Sandbox, manifestPath string) (*types.San
 	if m.Spec.PolicyFile != "" {
 		path := m.Spec.PolicyFile
 		if !filepath.IsAbs(path) {
-			if manifestPath == "-" {
+			switch classifyManifestSource(manifestPath) {
+			case sourceStdin:
 				return nil, &UsageError{Err: fmt.Errorf("spec.policyFile %q must be an absolute path when the manifest is read from stdin", path)}
+			case sourceURL:
+				return nil, &UsageError{Err: fmt.Errorf("spec.policyFile %q must be an absolute path when the manifest is read from a URL", path)}
 			}
 			if manifestPath != "" {
 				path = filepath.Join(filepath.Dir(manifestPath), path)

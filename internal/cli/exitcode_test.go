@@ -93,6 +93,14 @@ func TestExitCodeFor(t *testing.T) {
 		{"vault forbidden → forbidden", &vaultconfig.ErrForbidden{Mount: "osd-sre", Path: "rosa-agent"}, ExitForbidden},
 		{"vault secret not found → notfound", &vaultconfig.ErrSecretNotFound{Mount: "osd-sre", Path: "rosa-agent"}, ExitNotFound},
 		{"vault field not string → usage", &vaultconfig.ErrFieldNotString{Field: "oidc-client-id"}, ExitUsage},
+
+		// -f URL manifest fetch typed errors (ROSAENG-74491) — exercised
+		// indirectly from manifest_url_test.go/manifest_url_cli_test.go too,
+		// but this table is the one AGENTS.md's "add a test row for every
+		// typed error" rule points at.
+		{"manifest fetch error (non-2xx) → error", &manifestFetchError{URL: "https://example.com/m.yaml", Status: 500}, ExitError},
+		{"manifest fetch error (network) → error", &manifestFetchError{URL: "https://example.com/m.yaml", Err: errors.New("dial tcp: timeout")}, ExitError},
+		{"manifest url size error → error", &manifestURLSizeError{URL: "https://example.com/m.yaml", Limit: manifestURLSizeLimit}, ExitError},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

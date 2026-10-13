@@ -249,7 +249,7 @@ These flags apply to every command:
 |------|---------|-------------|
 | `--gateway`, `-g` | `OPENSHELL_GATEWAY` | Gateway name (selects config directory) |
 | `--gateway-endpoint` | `OPENSHELL_GATEWAY_ENDPOINT` | Gateway gRPC endpoint URL |
-| `--gateway-insecure` | `OPENSHELL_GATEWAY_INSECURE` | Skip TLS verification (gRPC dial, and `gateway add`'s OIDC-discovery probe) |
+| `--gateway-insecure` | `OPENSHELL_GATEWAY_INSECURE` | Skip TLS verification (gRPC dial, `gateway add`'s OIDC-discovery probe, and `-f` manifest URL fetches — the flag name says "gateway", but a `-f` manifest host is not the gateway; this is a consequence of sharing `http.DefaultTransport`, not a separate opt-in) |
 | `--workspace` | `OPENSHELL_WORKSPACE` | Workspace name (default: `default`) |
 | `--token` | `OPENSHELL_TOKEN` | Bearer token (overrides OIDC) |
 | `--config` | — | Config file path |
@@ -290,6 +290,12 @@ openshellctl sandbox create --from ghcr.io/org/image:tag
 openshellctl sandbox create -f sandbox.yaml
 cat sandbox.yaml | openshellctl sandbox create -f -
 
+# Create from a manifest hosted at an http(s):// URL — e.g. a manifest kept
+# in a git repo or object store, fetched the same way kubectl/oc do for
+# "apply -f <url>" (see "Manifest URLs" below for the trust-boundary note;
+# a1b2c3d below stands in for a real pinned commit SHA)
+openshellctl sandbox create -f https://raw.githubusercontent.com/org/repo/a1b2c3d/sandbox.yaml
+
 # Create from a templated manifest file (see "Manifest template parameters")
 openshellctl sandbox create -f sandbox.yaml \
   -p NAME=my-run \
@@ -318,7 +324,7 @@ openshellctl sandbox create --from python -o json
 |------|-------------|
 | `--from` | Image reference or community name (e.g. `python`, `pytorch`) |
 | `--name` | Sandbox name (auto-generated if omitted; max 19 chars) |
-| `-f`, `--file` | Manifest YAML file (`-` for stdin) |
+| `-f`, `--file` | Manifest YAML file (`-` for stdin, or an `http(s)://` URL) |
 | `-p`, `--param` | Template parameter `KEY=VALUE`, substituted for `${KEY}` in the `-f` manifest (repeatable) |
 | `--param-file` | File of `KEY=VALUE` template parameters, one per line, `#` comments allowed (repeatable) |
 | `--parameters` | Print the `-f` manifest's `${KEY}` parameter names, one per line, and exit without creating anything |
@@ -407,7 +413,22 @@ openshellctl sandbox delete -f sop-improve.yaml
 
 These fields are ignored by the operator — they control what the CLI does before and after creation (`replace`/`replaceTimeout` run before; the rest run after). CLI flags always override manifest values.
 
-**`spec.policy`** (inline map) and **`spec.policyFile`** (path string) are mutually exclusive. `spec.policyFile` is resolved relative to the manifest file's directory; when the manifest is read from stdin, `policyFile` must be an absolute path.
+**`spec.policy`** (inline map) and **`spec.policyFile`** (path string) are mutually exclusive. `spec.policyFile` is resolved relative to the manifest file's directory; when the manifest is read from stdin or from an `http(s)://` URL, `policyFile` must be an absolute path.
+
+#### Manifest URLs
+
+`-f`/`--file` also accepts an `http(s)://` URL, on every command that accepts `-f` (not just `sandbox create`) — fetched via `net/http` before decoding, mirroring the `kubectl apply -f <url>` / `oc create -f <url>` convention:
+
+```bash
+openshellctl sandbox create -f https://raw.githubusercontent.com/org/repo/main/sandbox.yaml
+openshellctl sandbox get -f https://internal.example.com/manifests/sb.yaml
+```
+
+The response is capped at 1 MiB and the request times out after 10s; a non-2xx response is an error naming the URL and status code, never decoded as a manifest. Redirects follow Go's default `http.Client` policy except for one refusal: an `https://` URL redirecting to a plain `http://` URL is rejected, since following it would let a man-in-the-middle on the second hop rewrite the manifest in flight. A URL containing userinfo (`https://user:pass@host/...`) is rejected outright — `net/http` would otherwise silently attach that as a Basic `Authorization` header, and no credential (gateway OIDC bearer token, Vault token, or otherwise) is ever attached to a manifest-fetch request regardless. Authenticated manifest URLs (one requiring its own bearer token or basic auth) are not supported.
+
+**Trust boundary:** a manifest controls `spec.upload[].local` (which local files get uploaded), `spec.command` and `spec.env` (what runs inside the sandbox, with what environment), and `spec.policy`/`spec.policyFile` and `providerRefs` (what the sandbox is allowed to do and reach) — so whoever controls a `-f` URL's content controls all of that. Prefer a URL pinned to an immutable commit SHA (as in the example above, `.../org/repo/a1b2c3d/sandbox.yaml`) over a branch or tag ref that can change underneath you. A `--file-sha256`-style content-verification flag is a natural follow-up (not implemented here) for pinning to a specific manifest's bytes rather than trusting the host.
+
+`spec.upload[].local` paths are resolved relative to the CLI's current working directory, not the manifest's location — true for a local-file manifest too, and unchanged by URL support; a URL manifest has no "manifest directory" a relative upload path could even mean.
 
 #### Manifest template parameters
 
@@ -466,7 +487,7 @@ openshellctl sandbox get                       # uses last-used sandbox
 
 | Flag | Description |
 |------|-------------|
-| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin) |
+| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin, or an `http(s)://` URL) |
 | `-o`, `--output` | Output format: `table` (default), `json`, `yaml` |
 
 ### `sandbox list`
@@ -508,7 +529,7 @@ openshellctl sandbox delete my-sandbox --wait --wait-timeout 2m
 
 | Flag | Description |
 |------|-------------|
-| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin) |
+| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin, or an `http(s)://` URL) |
 | `--all` | Delete all sandboxes in the workspace |
 | `--wait` | Wait for deletion to complete |
 | `--wait-timeout` | Wait timeout (default: `5m`) |
@@ -528,7 +549,7 @@ openshellctl sandbox start                   # uses last-used sandbox
 
 | Flag | Description |
 |------|-------------|
-| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin) |
+| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin, or an `http(s)://` URL) |
 
 ### `sandbox exec`
 
@@ -558,7 +579,7 @@ openshellctl sandbox exec --name my-sandbox --tty -- bash
 | Flag | Description |
 |------|-------------|
 | `-n`, `--name` | Sandbox name (defaults to last-used) |
-| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin) |
+| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin, or an `http(s)://` URL) |
 | `--env` | Environment variable `KEY=VALUE` (repeatable) |
 | `--workdir` | Working directory inside the sandbox |
 | `--timeout` | Timeout in seconds (0 = none) |
@@ -579,7 +600,7 @@ openshellctl sandbox connect                   # uses last-used sandbox
 
 | Flag | Description |
 |------|-------------|
-| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin) |
+| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin, or an `http(s)://` URL) |
 
 Detach from the session with **Ctrl-P Ctrl-Q** (the connection closes cleanly and exits 0).
 
@@ -600,7 +621,7 @@ By default, `.gitignore` rules are respected for directory uploads. Use `--no-gi
 
 | Flag | Description |
 |------|-------------|
-| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin) |
+| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin, or an `http(s)://` URL) |
 | `--no-git-ignore` | Disable `.gitignore` filtering for directory uploads |
 
 ### `sandbox download`
@@ -617,7 +638,7 @@ Arguments are `NAME SANDBOX_PATH [DEST]`. If `DEST` is omitted, files are placed
 
 | Flag | Description |
 |------|-------------|
-| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin) |
+| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin, or an `http(s)://` URL) |
 
 ### `sandbox ssh-config`
 
@@ -631,7 +652,7 @@ openshellctl sandbox ssh-config                   # uses last-used sandbox
 
 | Flag | Description |
 |------|-------------|
-| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin) |
+| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin, or an `http(s)://` URL) |
 
 This outputs a block suitable for `~/.ssh/config`, using `openshellctl ssh-proxy` as the ProxyCommand.
 
@@ -697,7 +718,7 @@ openshellctl logs my-sandbox --source gateway  # gateway logs only
 
 | Flag | Description |
 |------|-------------|
-| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin) |
+| `-f`, `--file` | Manifest file to read sandbox name from (`-` for stdin, or an `http(s)://` URL) |
 | `--tail` | Stream live logs |
 | `-n` | Number of log lines (default: 200) |
 | `--since` | Show logs from this duration ago (e.g. `5m`, `1h`, `30s`) |
@@ -753,7 +774,7 @@ openshellctl doctor -f sandbox.yaml -o json      # providerRefs from a manifest;
 |------|-------------|
 | `-o`, `--output` | Format: `table` (default), `json`, `yaml` |
 | `--provider` | Provider name/type to check exists on the gateway (repeatable); wins over `-f` when both are given |
-| `-f`, `--file` | Manifest file to read `providerRefs` from, when `--provider` is not given (`-` for stdin) |
+| `-f`, `--file` | Manifest file to read `providerRefs` from, when `--provider` is not given (`-` for stdin, or an `http(s)://` URL) |
 
 ### `token`
 

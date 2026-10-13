@@ -47,11 +47,20 @@ func needsTemplating(data []byte, tf templateFlags) bool {
 }
 
 // loadManifestWithParams is sandbox create's one orchestration function for
-// -f (AGENTS.md's N+1 rule: RunE calls this, and this calls only pure
-// functions — paramtemplate.* and decodeManifestBytes below). It owns all
-// the I/O: reading the manifest (path, or "-" for stdin), reading each
-// --param-file through fsys, and writing --parameters output/override
-// warnings to cmd's stdout/stderr.
+// -f. RunE calls this; this owns the I/O — reading the manifest (path, "-"
+// for stdin, or an http(s):// URL, via readManifestBytes/fetchManifestURL in
+// manifest_url.go, the same shared chokepoint loadManifest below uses, so
+// ROSAENG-74491's URL support reaches sandbox create's templating path too),
+// reading each --param-file through fsys, and writing --parameters output/
+// override warnings to cmd's stdout/stderr — and calls the pure
+// paramtemplate.*/decodeManifestBytes functions for the actual templating
+// decisions. The extra readManifestBytes->fetchManifestURL layer below this
+// function's own I/O is a deliberate, documented exception to AGENTS.md's
+// N+1 depth rule: it exists solely because the ticket requires loadManifest
+// and loadManifestWithParams to share one manifest-byte-reading boundary
+// rather than duplicating the stdin/URL/file branch in both places, and it
+// is itself a thin I/O shell (no further decision-making) rather than a
+// second orchestrator.
 //
 // When templating isn't needed at all (needsTemplating is false), it
 // decodes the original bytes unchanged — byte-for-byte identical to
@@ -83,13 +92,7 @@ func needsTemplating(data []byte, tf templateFlags) bool {
 // same tradeoff oc process makes) that must stay contained to the one
 // command that opts into it.
 func loadManifestWithParams(cmd *cobra.Command, fsys fs.FS, path string, tf templateFlags) (*v1alpha1.Sandbox, bool, error) {
-	var data []byte
-	var err error
-	if path == "-" {
-		data, err = readAll(cmd.InOrStdin())
-	} else {
-		data, err = os.ReadFile(path)
-	}
+	data, err := readManifestBytes(cmd, newManifestHTTPClient(), path)
 	if err != nil {
 		return nil, false, err
 	}

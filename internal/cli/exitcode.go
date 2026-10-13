@@ -161,6 +161,17 @@ func exitCodeFor(err error) int {
 		return ExitProvision
 	}
 
+	// -f URL manifest fetch failures (non-2xx, size cap, redirect downgrade,
+	// network/timeout) → 1, closer to a network failure than a usage error.
+	// Listed explicitly (rather than only falling into the catch-all below)
+	// so a future change to either type is caught by this function's own
+	// exhaustive-by-construction test.
+	var manifestFetch *manifestFetchError
+	var manifestSize *manifestURLSizeError
+	if errors.As(err, &manifestFetch) || errors.As(err, &manifestSize) {
+		return ExitError
+	}
+
 	// Everything else — including gateway.UnavailableError, DeadlineError,
 	// and the RPCError catch-all — is a generic/connectivity error → 1.
 	return ExitError
