@@ -16,7 +16,7 @@ make verify             # pin + tidy + generate checks
 make test-all           # all of the above
 ```
 
-Go version is declared in `go.mod` (currently 1.26). CI runs on GitHub Actions (`.github/workflows/ci.yml`): verify, test, lint, image build.
+Go version is declared in `go.mod` (currently 1.26). CI runs outside GitHub Actions; run `make test-all` locally to reproduce what CI checks (verify, test, lint, image build).
 
 ## Project layout
 
