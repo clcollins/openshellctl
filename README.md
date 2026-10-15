@@ -5,7 +5,7 @@ A CLI tool for running sandboxes on [HyperShell](https://github.com/openshift-on
 openshellctl exists because getting an agent sandbox running on HyperShell from automation used to mean a bash prelude: fetch credentials from Vault, write the gateway's `metadata.json`, mint a token, hope it hasn't expired by cleanup time, then hand-assemble a long `sandbox create` command. openshellctl folds all of that into the binary:
 
 - **Sandboxes as code.** A `kind: Sandbox` YAML manifest holds the image, command, providers, env, resources, uploads and session behaviour. `sandbox create -f`, `sandbox delete -f`, `sandbox get -f` and every other `-f` command read the same file, from disk, stdin or an `http(s)://` URL. See [Manifest format](#manifest-format).
-- **Templates, not copies.** Manifests take `${NAME}`/`${PROMPT}`-style parameters filled from `-p KEY=VALUE` or `--param-file`, `oc process` style, so one checked-in template serves every run. Ready-made ones live in [`templates/`](templates/). See [Manifest template parameters](#manifest-template-parameters).
+- **Static or templated manifests, your call.** A `kind: Sandbox` YAML file can be used as-is — a fully static manifest, which is what you want for CI or GitOps/"as-code" pipelines where every value is already known and checked in — or it can take `${NAME}`/`${PROMPT}`-style parameters filled in later from `-p KEY=VALUE` or `--param-file`, `oc process` style, which is what makes sense for a human running `openshellctl` by hand against one checked-in template for every run. See [Manifest template parameters](#manifest-template-parameters). (The rosa-agent-specific example templates that used to live under `templates/` here have moved to [`openshift-online/rosa-agent`'s `sandbox/templates/`](https://github.com/openshift-online/rosa-agent/tree/main/sandbox/templates) — the files that remain in this repo's `templates/` are deprecation stubs that print where they went and exit.)
 - **Vault-backed, zero-prelude auth.** Point it at a Vault KV v2 secret and it fills in the gateway endpoint, OIDC issuer, client ID and client secret itself; a service account authenticates with `client_credentials` and the token is checked on every request and re-minted before it expires, so an hour-long job's `--no-keep` cleanup still has a valid token. See [Authentication](#authentication).
 - **Nothing to install alongside it.** Pure Go, single static binary, no shell-out to `openshell`, `ssh`, `tar`, `git` or `vault`. It is a standalone replacement for the upstream Rust CLI, not a wrapper around it, and its `pkg/` packages are importable for operators and controllers.
 
@@ -46,7 +46,7 @@ export VAULT_ADDR=https://vault.example.com
 vault login -method=oidc        # openshellctl reads the resulting token; it never logs in itself
 
 openshellctl --vault-kv-mount secret --vault-kv-path myapp --vault-field-prefix myapp \
-  sandbox create -f templates/noninteractive.yaml \
+  sandbox create -f your-manifest.yaml \
   -p NAME=ROSAENG-12345 \
   -p PROMPT="retrieve and implement ROSAENG-12345" \
   --no-keep
@@ -61,7 +61,7 @@ openshellctl --vault-kv-mount secret --vault-kv-path myapp --vault-field-prefix 
 > export OPENSHELL_VAULT_KV_MOUNT=secret
 > export OPENSHELL_VAULT_KV_PATH=myapp
 > export OPENSHELL_VAULT_FIELD_PREFIX=myapp
-> openshellctl sandbox create -f templates/noninteractive.yaml -p NAME=... -p PROMPT="..." --no-keep
+> openshellctl sandbox create -f your-manifest.yaml -p NAME=... -p PROMPT="..." --no-keep
 > ```
 
 The secret at your `--vault-kv-path` supplies `<prefix>-gateway-endpoint`,
@@ -69,11 +69,13 @@ The secret at your `--vault-kv-path` supplies `<prefix>-gateway-endpoint`,
 `<prefix>` is whatever you pass to `--vault-field-prefix` (`myapp` in
 the example above, but your own mount, path and prefix can be anything);
 anything you set yourself via flag or `OPENSHELL_*` env var still wins. See
-["4. Vault-sourced config"](#4-vault-sourced-config). The template is one of
-two checked in under [`templates/`](templates/) — `interactive.yaml`
-(attach, `noKeep`) and `noninteractive.yaml` (`--print`, `approvalMode:
-auto`) — and `-p` fills its `${NAME}` and `${PROMPT}` placeholders; see
-["Manifest template parameters"](#manifest-template-parameters).
+["4. Vault-sourced config"](#4-vault-sourced-config). `your-manifest.yaml`
+is any `kind: Sandbox` manifest of your own with `${NAME}`/`${PROMPT}`-style
+placeholders that `-p` fills in; see ["Manifest template
+parameters"](#manifest-template-parameters). For a concrete, ready-made pair
+of such templates (`interactive.yaml` — attach, `noKeep` — and
+`noninteractive.yaml` — `--print`, `approvalMode: auto`), see
+[`openshift-online/rosa-agent`'s `sandbox/templates/`](https://github.com/openshift-online/rosa-agent/tree/main/sandbox/templates).
 
 > **Always `export` a credential, never assign it bare.** `VAR=$(...)`
 > (no `export`) sets a shell-local variable openshellctl's child process
@@ -245,7 +247,7 @@ openshellctl --vault-kv-mount secret --vault-kv-path myapp --vault-field-prefix 
 export OPENSHELL_VAULT_KV_MOUNT=secret
 export OPENSHELL_VAULT_KV_PATH=myapp
 export OPENSHELL_VAULT_FIELD_PREFIX=myapp
-openshellctl sandbox create -f templates/noninteractive.yaml -p NAME=my-run -p PROMPT="..." --no-keep
+openshellctl sandbox create -f your-manifest.yaml -p NAME=my-run -p PROMPT="..." --no-keep
 ```
 
 This reads the secret at `secret/myapp` and, for each of `gateway`,
