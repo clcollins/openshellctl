@@ -10,7 +10,7 @@ spec:
     - |
       echo "DEPRECATED: templates/interactive.yaml has moved out of openshellctl." >&2
       echo "Use openshift-online/rosa-agent's sandbox/templates/interactive.yaml instead:" >&2
-      echo "  https://github.com/openshift-online/rosa-agent/blob/main/sandbox/templates/interactive.yaml" >&2
+      echo "  https://raw.githubusercontent.com/openshift-online/rosa-agent/main/sandbox/templates/interactive.yaml" >&2
       echo "(ignored prompt: ${PROMPT})" >&2
       exit 1
   sessionOpts:
