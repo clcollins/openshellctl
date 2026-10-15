@@ -16,12 +16,12 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 	}
-	for _, k := range []string{
-		"OPENSHELL_TOKEN", "OPENSHELL_GATEWAY", "OPENSHELL_GATEWAY_ENDPOINT",
-		"OPENSHELL_GATEWAY_INSECURE", "OPENSHELL_WORKSPACE",
-		"OPENSHELL_OIDC_ISSUER", "OPENSHELL_OIDC_CLIENT_ID",
-		"OPENSHELL_OIDC_CLIENT_SECRET", "OPENSHELL_OIDC_AUDIENCE",
-	} {
+	// Scrub every OPENSHELL_*/VAULT_* variable by prefix rather than by a
+	// hand-maintained list (see envNamesToScrub, main_env_test.go, and the
+	// exhaustive regression check in TestEnvScrub_CoversEveryEnvBackedInput,
+	// main_envscrub_test.go): a hard-coded list silently stops covering new
+	// env-backed flags or os.Getenv reads.
+	for _, k := range envNamesToScrub(os.Environ(), []string{"OPENSHELL_", "VAULT_"}) {
 		if err := os.Unsetenv(k); err != nil {
 			panic(err)
 		}

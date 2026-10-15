@@ -145,7 +145,7 @@ All unit tests must be fully hermetic:
 - **No network calls**: no HTTP, gRPC, or API requests. Mock all external services via interfaces (e.g., `gateway.Gateway` mock).
 - **No host filesystem access**: use `t.TempDir()` for any filesystem operations. Never read from or write to the real filesystem outside the temp directory.
 - **No external tooling**: do not shell out to `ssh`, `tar`, `git`, `sh`, or any other binary. All such functionality is implemented in-process (archive/tar, golang.org/x/crypto/ssh, go-gitignore).
-- **No host state**: tests must not depend on environment variables, user config, running services, or network availability.
+- **No host state**: tests must not depend on environment variables, user config, running services, or network availability. `internal/cli`'s `TestMain` unsets every `OPENSHELL_*` and `VAULT_*` variable; a new env var read directly with `os.Getenv` (not via a persistent flag) must be added to the list in `TestEnvScrub_CoversEveryEnvBackedInput`.
 
 The test SSH server runs in-process over buffered in-memory connections, authenticates with `NoClientAuth`, and implements remote commands in Go against `t.TempDir()` trees.
 
