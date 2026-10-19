@@ -5,7 +5,6 @@ import (
 	"io"
 	"time"
 
-	dm "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 	"google.golang.org/protobuf/types/known/durationpb"
 
@@ -17,7 +16,7 @@ import (
 // empty stdin, and the initial cols/rows. Pure.
 func buildExecStartInput(workspace, sandboxName string, r *ExecRequest) *pb.ExecSandboxInput {
 	req := &pb.ExecSandboxRequest{
-		WorkspaceScope: &dm.WorkspaceSelector{Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace}},
+		WorkspaceScope: workspaceScope(workspace),
 		Sandbox:        sandboxName,
 		Command:        r.Command,
 		Workdir:        r.Workdir,

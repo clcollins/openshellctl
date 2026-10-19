@@ -60,8 +60,6 @@
       {"long": "output", "short": "o", "type": "outputFormat", "default": "table"}
     ],
     "list": [
-      {"long": "page-size", "type": "int", "default": "100"},
-      {"long": "page-token", "type": "string", "default": ""},
       {"long": "ids", "type": "bool", "conflicts": ["names", "output"]},
       {"long": "names", "type": "bool", "conflicts": ["ids", "output"]},
       {"long": "selector", "type": "string"},

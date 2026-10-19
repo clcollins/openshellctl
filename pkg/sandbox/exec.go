@@ -7,7 +7,6 @@ import (
 	"time"
 
 	types "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
-	dm "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 	"google.golang.org/protobuf/types/known/durationpb"
 
@@ -58,7 +57,7 @@ func ErrSandboxNotReady(name string, phase types.SandboxPhase) error {
 // buildExecRequest builds the raw ExecSandboxRequest (run.rs:1478-1487). Pure.
 func buildExecRequest(workspace, sandboxName string, r *ExecRequest) *pb.ExecSandboxRequest {
 	req := &pb.ExecSandboxRequest{
-		WorkspaceScope: &dm.WorkspaceSelector{Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace}},
+		WorkspaceScope: workspaceScope(workspace),
 		Sandbox:        sandboxName,
 		Command:        r.Command,
 		Workdir:        r.Workdir,

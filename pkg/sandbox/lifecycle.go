@@ -7,7 +7,6 @@ import (
 	"io"
 	"time"
 
-	dm "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 
 	"github.com/openshift-online/openshellctl/pkg/gateway"
@@ -70,7 +69,7 @@ func watchUntilPhase(ctx context.Context, gw gateway.Gateway, workspace, sandbox
 	defer cancel()
 
 	stream, err := gw.WatchSandbox(watchCtx, &pb.WatchSandboxRequest{
-		WorkspaceScope: &dm.WorkspaceSelector{Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace}},
+		WorkspaceScope: workspaceScope(workspace),
 		Sandbox:        sandboxName,
 		FollowStatus:   true,
 	})

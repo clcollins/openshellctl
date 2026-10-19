@@ -132,10 +132,20 @@ func TestExecInteractive_SendsStartAndReturnsExit(t *testing.T) {
 	if out.String() != "hi" {
 		t.Errorf("stdout = %q", out.String())
 	}
-	// The first sent message must be the Start payload.
+	// The first sent message must be the Start payload with correct scope.
 	bidi.mu.Lock()
 	defer bidi.mu.Unlock()
-	if len(bidi.sent) == 0 || bidi.sent[0].GetStart() == nil {
-		t.Errorf("first sent should be Start, got %+v", bidi.sent)
+	if len(bidi.sent) == 0 {
+		t.Fatal("expected at least one sent message")
+	}
+	start := bidi.sent[0].GetStart()
+	if start == nil {
+		t.Fatalf("first sent should be Start, got %+v", bidi.sent[0])
+	}
+	if start.WorkspaceScope == nil || start.WorkspaceScope.GetWorkspace() != "default" {
+		t.Errorf("Start WorkspaceScope = %+v, want workspace=default", start.WorkspaceScope)
+	}
+	if start.Sandbox != "sb-1" {
+		t.Errorf("Start Sandbox = %q, want sb-1", start.Sandbox)
 	}
 }

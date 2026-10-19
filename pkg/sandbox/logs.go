@@ -8,7 +8,6 @@ import (
 	"time"
 
 	types "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
-	dm "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -99,7 +98,7 @@ type LogsRequest struct {
 // (run.rs:6957-6983). Pure.
 func buildWatchLogsRequest(workspace, sandboxName string, r *LogsRequest) *pb.WatchSandboxRequest {
 	req := &pb.WatchSandboxRequest{
-		WorkspaceScope: &dm.WorkspaceSelector{Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace}},
+		WorkspaceScope: workspaceScope(workspace),
 		Sandbox:        sandboxName,
 		FollowStatus:   false,
 		FollowLogs:     true,

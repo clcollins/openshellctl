@@ -9,6 +9,12 @@
       {"long": "param-file", "type": "stringArray", "repeatable": true, "note": "ROSAENG-74244; oc process --param-file convention"},
       {"long": "parameters", "type": "bool", "note": "ROSAENG-74244; oc process --parameters convention"},
       {"long": "ignore-unknown-parameters", "type": "bool", "note": "ROSAENG-74244; oc process --ignore-unknown-parameters convention"}
+    ],
+    "list": [
+      {"long": "limit", "type": "int", "default": "100", "note": "openshellctl page-size hint; upstream uses --page-size/--page-token for single-page pagination, openshellctl's ListAll follows all pages so --limit controls the per-page batch size"}
+    ],
+    "provider list": [
+      {"long": "limit", "type": "int", "default": "100", "note": "openshellctl page-size hint; upstream uses --page-size/--page-token, openshellctl's ListAll follows all pages so --limit controls the per-page batch size"}
     ]
   }
 }

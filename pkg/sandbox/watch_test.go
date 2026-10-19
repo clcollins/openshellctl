@@ -31,7 +31,7 @@ func errorSandboxEvent(reason, message string) *pb.SandboxStreamEvent {
 func TestWatchUntilReady_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING),
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_READY),
 	}}, nil)
@@ -51,7 +51,7 @@ func TestWatchUntilReady_StaleReadyGuard(t *testing.T) {
 	// Ready is not accepted; the stream then ends → ErrStreamEnded.
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_READY),
 	}}, nil)
 
@@ -65,7 +65,7 @@ func TestWatchUntilReady_StaleReadyGuard(t *testing.T) {
 func TestWatchUntilReady_ErrorCondition(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING),
 		errorSandboxEvent("ImagePullBackOff", "cannot pull image"),
 	}}, nil)
@@ -86,7 +86,7 @@ func TestWatchUntilReady_Timeout(t *testing.T) {
 	gw := mock.NewMockGateway(ctrl)
 	// Two non-progress snapshots; the clock advances past the idle deadline
 	// between events so the timeout fires.
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING),
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING),
 	}}, nil)
@@ -117,7 +117,7 @@ func TestWatchUntilReady_Timeout(t *testing.T) {
 func TestWatchUntilReady_ProgressResetsIdle(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING),
 		eventProgress(), // resets the idle deadline
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_READY),
@@ -157,7 +157,7 @@ func TestWatchUntilReady_ProgressResetsIdle(t *testing.T) {
 func TestWatchUntilReady_CompletedIsTerminal(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING),
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_COMPLETED),
 	}}, nil)

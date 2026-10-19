@@ -76,6 +76,19 @@ func (e *ErrProvisionTimeout) Error() string {
 // ErrStreamEnded reports the watch stream ending before a terminal phase.
 var ErrStreamEnded = errors.New("sandbox provisioning stream ended before reaching terminal phase")
 
+// workspaceScope builds the WorkspaceSelector for raw proto requests that
+// require a workspace-scoped lookup (watch, exec, logs). Panics on empty
+// workspace so callers surface the bug at test time, not as a silent
+// server-side InvalidArgument.
+func workspaceScope(workspace string) *dm.WorkspaceSelector {
+	if workspace == "" {
+		panic("workspaceScope called with empty workspace")
+	}
+	return &dm.WorkspaceSelector{
+		Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace},
+	}
+}
+
 // progress metadata keys that reset the idle deadline (common.rs:510-534).
 const (
 	metaCompleteStep = "openshell.progress.complete_step"
@@ -99,7 +112,7 @@ func WatchUntilReady(ctx context.Context, gw gateway.Gateway, workspace, sandbox
 	}
 
 	req := &pb.WatchSandboxRequest{
-		WorkspaceScope: &dm.WorkspaceSelector{Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace}},
+		WorkspaceScope: workspaceScope(workspace),
 		Sandbox:        sandboxName,
 		FollowStatus:   true,
 		FollowLogs:     true,

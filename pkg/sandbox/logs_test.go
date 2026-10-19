@@ -144,7 +144,7 @@ func logEvent(msg string) *pb.SandboxStreamEvent {
 func TestLogs_Tail(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		logEvent("line one"),
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_READY), // ignored (not a Log payload)
 		logEvent("line two"),
