@@ -7,6 +7,7 @@ import (
 	"io"
 	"time"
 
+	dm "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 
 	"github.com/openshift-online/openshellctl/pkg/gateway"
@@ -45,7 +46,7 @@ func Stop(ctx context.Context, gw gateway.Gateway, workspace, name string, timeo
 	if sb == nil {
 		return nil, errors.New("gateway returned no sandbox after stop")
 	}
-	return watchUntilPhase(ctx, gw, sb.ID, pb.SandboxPhase_SANDBOX_PHASE_STOPPED, "Stopped", timeout)
+	return watchUntilPhase(ctx, gw, workspace, name, pb.SandboxPhase_SANDBOX_PHASE_STOPPED, "Stopped", timeout)
 }
 
 // Start starts a sandbox and watches until READY.
@@ -57,18 +58,22 @@ func Start(ctx context.Context, gw gateway.Gateway, workspace, name string, time
 	if sb == nil {
 		return nil, errors.New("gateway returned no sandbox after start")
 	}
-	return watchUntilPhase(ctx, gw, sb.ID, pb.SandboxPhase_SANDBOX_PHASE_READY, "Ready", timeout)
+	return watchUntilPhase(ctx, gw, workspace, name, pb.SandboxPhase_SANDBOX_PHASE_READY, "Ready", timeout)
 }
 
 // watchUntilPhase follows status until the target phase, Error, timeout, or EOF.
-func watchUntilPhase(ctx context.Context, gw gateway.Gateway, id string, target pb.SandboxPhase, targetName string, timeout time.Duration) (*pb.Sandbox, error) {
+func watchUntilPhase(ctx context.Context, gw gateway.Gateway, workspace, sandboxName string, target pb.SandboxPhase, targetName string, timeout time.Duration) (*pb.Sandbox, error) {
 	if timeout == 0 {
 		timeout = 300 * time.Second
 	}
 	watchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	stream, err := gw.WatchSandbox(watchCtx, &pb.WatchSandboxRequest{Sandbox: id, FollowStatus: true})
+	stream, err := gw.WatchSandbox(watchCtx, &pb.WatchSandboxRequest{
+		WorkspaceScope: &dm.WorkspaceSelector{Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace}},
+		Sandbox:        sandboxName,
+		FollowStatus:   true,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -92,7 +97,8 @@ func watchUntilPhase(ctx context.Context, gw gateway.Gateway, id string, target 
 		switch sb.GetStatus().GetPhase() {
 		case target:
 			return sb, nil
-		case pb.SandboxPhase_SANDBOX_PHASE_ERROR:
+		case pb.SandboxPhase_SANDBOX_PHASE_ERROR,
+			pb.SandboxPhase_SANDBOX_PHASE_COMPLETED:
 			return nil, &ErrLifecycle{Target: targetName}
 		}
 	}

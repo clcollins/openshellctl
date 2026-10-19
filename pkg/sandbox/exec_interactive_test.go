@@ -15,13 +15,16 @@ import (
 
 func TestBuildExecStartInput(t *testing.T) {
 	r := &ExecRequest{Command: []string{"bash"}, Workdir: "/w", Timeout: 5, Env: map[string]string{"A": "B"}, Cols: 100, Rows: 30}
-	in := buildExecStartInput("sb-9", r)
+	in := buildExecStartInput("default", "sb-9", r)
 	start := in.GetStart()
 	if start == nil {
 		t.Fatal("expected Start payload")
 	}
 	if start.Sandbox != "sb-9" || !start.Tty || start.Cols != 100 || start.Rows != 30 {
 		t.Errorf("start = %+v", start)
+	}
+	if start.WorkspaceScope == nil || start.WorkspaceScope.GetWorkspace() != "default" {
+		t.Errorf("workspace scope: %+v", start.WorkspaceScope)
 	}
 	if len(start.Stdin) != 0 {
 		t.Errorf("start stdin should be empty, got %q", start.Stdin)
@@ -36,7 +39,7 @@ func TestBuildExecStartInput(t *testing.T) {
 
 func TestBuildExecStartInput_ZeroTimeout(t *testing.T) {
 	r := &ExecRequest{Command: []string{"bash"}, Timeout: 0, Cols: 80, Rows: 24}
-	in := buildExecStartInput("sb-1", r)
+	in := buildExecStartInput("default", "sb-1", r)
 	start := in.GetStart()
 	if start == nil {
 		t.Fatal("expected Start payload")
@@ -119,7 +122,7 @@ func TestExecInteractive_SendsStartAndReturnsExit(t *testing.T) {
 		Stdin:  bytes.NewReader(nil), // immediate EOF
 		Stdout: &out,
 		Stderr: io.Discard,
-	}, "sb-1", &ExecRequest{Command: []string{"bash"}, Cols: 80, Rows: 24})
+	}, &ExecRequest{Workspace: "default", Name: "sb-1", Command: []string{"bash"}, Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatalf("interactive: %v", err)
 	}

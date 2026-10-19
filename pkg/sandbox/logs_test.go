@@ -82,7 +82,7 @@ func TestBufferTruncatedWarning(t *testing.T) {
 }
 
 func TestBuildWatchLogsRequest(t *testing.T) {
-	req := buildWatchLogsRequest("sb-1", &LogsRequest{
+	req := buildWatchLogsRequest("default", "sb-1", &LogsRequest{
 		Lines:   50,
 		SinceMs: 12345,
 		Sources: []string{"gateway"},
@@ -90,6 +90,9 @@ func TestBuildWatchLogsRequest(t *testing.T) {
 	})
 	if req.Sandbox != "sb-1" || !req.FollowLogs || req.FollowStatus || req.FollowEvents {
 		t.Errorf("follow flags: %+v", req)
+	}
+	if req.WorkspaceScope == nil || req.WorkspaceScope.GetWorkspace() != "default" {
+		t.Errorf("workspace scope: %+v", req.WorkspaceScope)
 	}
 	if req.LogTailLines != 50 || req.LogMinLevel != "WARN" {
 		t.Errorf("log fields: %+v", req)
@@ -103,7 +106,7 @@ func TestBuildWatchLogsRequest(t *testing.T) {
 }
 
 func TestBuildWatchLogsRequest_NoSince(t *testing.T) {
-	req := buildWatchLogsRequest("sb-1", &LogsRequest{Lines: 50})
+	req := buildWatchLogsRequest("default", "sb-1", &LogsRequest{Lines: 50})
 	if req.SinceTime != nil {
 		t.Errorf("sinceMs=0 should produce nil SinceTime, got %+v", req.SinceTime)
 	}
@@ -149,7 +152,7 @@ func TestLogs_Tail(t *testing.T) {
 
 	var out bytes.Buffer
 	err := Logs(context.Background(), LogsDeps{GW: gw, Stdout: &out, Stderr: io.Discard},
-		"sb-1", &LogsRequest{Tail: true, Lines: 200})
+		&LogsRequest{Workspace: "default", Name: "sb-1", Tail: true, Lines: 200})
 	if err != nil {
 		t.Fatalf("logs tail: %v", err)
 	}
@@ -174,7 +177,7 @@ func TestLogs_FetchWithBufferWarning(t *testing.T) {
 
 	var out, errOut bytes.Buffer
 	err := Logs(context.Background(), LogsDeps{GW: gw, Stdout: &out, Stderr: &errOut},
-		"sb-1", &LogsRequest{Workspace: "default", Name: "demo", Lines: 200, SinceMs: 999})
+		&LogsRequest{Workspace: "default", Name: "demo", Lines: 200, SinceMs: 999})
 	if err != nil {
 		t.Fatalf("logs fetch: %v", err)
 	}
@@ -196,7 +199,7 @@ func TestLogs_FetchNoWarningWithoutSince(t *testing.T) {
 
 	var errOut bytes.Buffer
 	err := Logs(context.Background(), LogsDeps{GW: gw, Stdout: io.Discard, Stderr: &errOut},
-		"sb-1", &LogsRequest{Workspace: "default", Name: "demo", Lines: 200, SinceMs: 0})
+		&LogsRequest{Workspace: "default", Name: "demo", Lines: 200, SinceMs: 0})
 	if err != nil {
 		t.Fatalf("logs fetch: %v", err)
 	}

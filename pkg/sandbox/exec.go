@@ -7,6 +7,7 @@ import (
 	"time"
 
 	types "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
+	dm "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 	"google.golang.org/protobuf/types/known/durationpb"
 
@@ -55,16 +56,17 @@ func ErrSandboxNotReady(name string, phase types.SandboxPhase) error {
 }
 
 // buildExecRequest builds the raw ExecSandboxRequest (run.rs:1478-1487). Pure.
-func buildExecRequest(sandboxID string, r *ExecRequest) *pb.ExecSandboxRequest {
+func buildExecRequest(workspace, sandboxName string, r *ExecRequest) *pb.ExecSandboxRequest {
 	req := &pb.ExecSandboxRequest{
-		Sandbox:     sandboxID,
-		Command:     r.Command,
-		Workdir:     r.Workdir,
-		Environment: r.Env,
-		Stdin:       r.Stdin,
-		Tty:         r.TTY,
-		Cols:        r.Cols,
-		Rows:        r.Rows,
+		WorkspaceScope: &dm.WorkspaceSelector{Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace}},
+		Sandbox:        sandboxName,
+		Command:        r.Command,
+		Workdir:        r.Workdir,
+		Environment:    r.Env,
+		Stdin:          r.Stdin,
+		Tty:            r.TTY,
+		Cols:           r.Cols,
+		Rows:           r.Rows,
 	}
 	if r.Timeout > 0 {
 		req.ExecutionTimeout = durationpb.New(time.Duration(r.Timeout) * time.Second)
@@ -97,7 +99,7 @@ func Exec(ctx context.Context, d ExecDeps, r *ExecRequest) (int, error) {
 		return 0, ErrSandboxNotReady(r.Name, sb.Status.Phase)
 	}
 
-	stream, err := d.GW.ExecSandbox(ctx, buildExecRequest(sb.ID, r))
+	stream, err := d.GW.ExecSandbox(ctx, buildExecRequest(r.Workspace, r.Name, r))
 	if err != nil {
 		return 0, err
 	}

@@ -7,6 +7,7 @@ import (
 	"io"
 	"time"
 
+	dm "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 
 	"github.com/openshift-online/openshellctl/pkg/gateway"
@@ -86,7 +87,7 @@ const (
 // Error, timeout, or EOF (run.rs:558-1023, A.7). The idle deadline resets only
 // on provisioning-progress events. Ready is accepted only after a non-Ready
 // phase was seen (stale-Ready guard).
-func WatchUntilReady(ctx context.Context, gw gateway.Gateway, id string, initialPhase pb.SandboxPhase, idleTimeout time.Duration, gpuRequested bool, sink ProgressSink, clock Clock) (*WatchOutcome, error) {
+func WatchUntilReady(ctx context.Context, gw gateway.Gateway, workspace, sandboxName string, initialPhase pb.SandboxPhase, idleTimeout time.Duration, gpuRequested bool, sink ProgressSink, clock Clock) (*WatchOutcome, error) {
 	if sink == nil {
 		sink = nopSink{}
 	}
@@ -98,7 +99,8 @@ func WatchUntilReady(ctx context.Context, gw gateway.Gateway, id string, initial
 	}
 
 	req := &pb.WatchSandboxRequest{
-		Sandbox:        id,
+		WorkspaceScope: &dm.WorkspaceSelector{Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace}},
+		Sandbox:        sandboxName,
 		FollowStatus:   true,
 		FollowLogs:     true,
 		FollowEvents:   true,
@@ -145,6 +147,10 @@ func WatchUntilReady(ctx context.Context, gw gateway.Gateway, id string, initial
 					return &WatchOutcome{Final: sb, Phase: phase}, nil
 				}
 			case pb.SandboxPhase_SANDBOX_PHASE_ERROR:
+				reason := readyFalseCondition(sb)
+				sink.Error(reason)
+				return nil, &ErrProvisionFailed{Reason: reason}
+			case pb.SandboxPhase_SANDBOX_PHASE_COMPLETED:
 				reason := readyFalseCondition(sb)
 				sink.Error(reason)
 				return nil, &ErrProvisionFailed{Reason: reason}

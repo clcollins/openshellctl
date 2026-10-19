@@ -1,12 +1,38 @@
 {
   "pin": "v0.1.3",
   "commit": "e1f3c82caa3ed3b65de22889ae7ef32a774878ef",
-  "note": "Checked-in extraction of `openshell sandbox ...` flags at v0.1.3. parity_test.go diffs the cobra tree against this table. Extends over commits as commands are implemented.",
+  "note": "Checked-in extraction of `openshell sandbox ...` flags at v0.1.3. parity_test.go diffs the cobra tree against this table. Extends over commits as commands are implemented. Flags present in upstream but not yet implemented in openshellctl are listed in 'unimplemented' (not 'subcommands') so parity_test.go does not flag them as stale.",
+  "unimplemented": {
+    "create": [
+      {"long": "template", "type": "string", "conflicts": ["from", "gpu", "cpu", "memory", "driver-config-json", "env"]},
+      {"long": "expose", "type": "uint16", "conflicts": ["no-keep"]},
+      {"long": "expose-authorization-mode", "type": "string", "requires": ["expose"]},
+      {"long": "restart-policy", "type": "string", "default": "never"}
+    ],
+    "exec": [
+      {"long": "no-login-shell", "type": "bool"}
+    ],
+    "provider list": [
+      {"long": "page-size", "type": "int", "default": "100"},
+      {"long": "page-token", "type": "string", "default": ""},
+      {"long": "output", "short": "o", "type": "outputFormat", "default": "table"}
+    ],
+    "provider attach": [
+      {"long": "wait", "type": "bool"},
+      {"long": "timeout", "type": "uint64", "default": "30"},
+      {"long": "output", "short": "o", "type": "outputFormat", "default": "table"}
+    ],
+    "provider detach": [
+      {"long": "wait", "type": "bool"},
+      {"long": "timeout", "type": "uint64", "default": "30"},
+      {"long": "output", "short": "o", "type": "outputFormat", "default": "table"}
+    ]
+  },
   "subcommands": {
     "create": [
       {"long": "name", "type": "string"},
       {"long": "from", "type": "string"},
-      {"long": "upload", "type": "stringSlice", "repeatable": true, "conflicts": ["command"]},
+      {"long": "upload", "type": "stringSlice", "repeatable": true},
       {"long": "no-git-ignore", "type": "bool", "requires": ["upload"]},
       {"long": "keep", "type": "bool", "hidden": true, "deprecated": true},
       {"long": "no-keep", "type": "bool", "conflicts": ["editor", "forward", "output", "detach"]},
@@ -20,29 +46,30 @@
       {"long": "forward", "type": "string", "conflicts": ["no-keep", "output"]},
       {"long": "tty", "type": "ttyTriState"},
       {"long": "no-tty", "type": "ttyTriState"},
-      {"long": "detach", "type": "bool"},
+      {"long": "detach", "type": "bool", "conflicts": ["editor"]},
       {"long": "auto-providers", "type": "autoProvidersTriState"},
       {"long": "no-auto-providers", "type": "autoProvidersTriState"},
       {"long": "label", "type": "stringSlice", "repeatable": true},
       {"long": "env", "type": "stringSlice", "repeatable": true},
       {"long": "no-credential-warnings", "type": "bool"},
       {"long": "approval-mode", "type": "string", "default": "manual"},
-      {"long": "output", "short": "o", "type": "outputFormat", "default": "table", "conflicts": ["editor", "command", "no-keep", "forward"]}
+      {"long": "output", "short": "o", "type": "outputFormat", "default": "table", "conflicts": ["editor", "no-keep", "forward"]}
     ],
     "get": [
       {"long": "policy-only", "type": "bool", "conflicts": ["output"]},
       {"long": "output", "short": "o", "type": "outputFormat", "default": "table"}
     ],
     "list": [
-      {"long": "limit", "type": "int", "default": "100"},
+      {"long": "page-size", "type": "int", "default": "100"},
+      {"long": "page-token", "type": "string", "default": ""},
       {"long": "ids", "type": "bool", "conflicts": ["names", "output"]},
       {"long": "names", "type": "bool", "conflicts": ["ids", "output"]},
       {"long": "selector", "type": "string"},
-      {"long": "output", "short": "o", "type": "outputFormat", "default": "table"},
+      {"long": "output", "short": "o", "type": "outputFormat", "default": "table", "conflicts": ["ids", "names"]},
       {"long": "all-workspaces", "type": "bool"}
     ],
     "delete": [
-      {"long": "all", "type": "bool", "conflicts": ["name"]}
+      {"long": "all", "type": "bool", "conflicts": ["names"]}
     ],
     "stop": [],
     "start": [],

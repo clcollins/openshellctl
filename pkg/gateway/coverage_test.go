@@ -129,7 +129,7 @@ func TestDeletionCompleted(t *testing.T) {
 	}{
 		{"completed", pb.DeletionOutcome_DELETION_OUTCOME_COMPLETED, true},
 		{"already_absent", pb.DeletionOutcome_DELETION_OUTCOME_ALREADY_ABSENT, true},
-		{"accepted", pb.DeletionOutcome_DELETION_OUTCOME_ACCEPTED, false},
+		{"accepted", pb.DeletionOutcome_DELETION_OUTCOME_ACCEPTED, true},
 		{"unspecified", pb.DeletionOutcome_DELETION_OUTCOME_UNSPECIFIED, false},
 	}
 	for _, tt := range tests {

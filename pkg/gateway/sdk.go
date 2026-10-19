@@ -320,11 +320,13 @@ func workspaceScope(workspace string) *dm.WorkspaceSelector {
 	}
 }
 
-// deletionCompleted maps a proto DeletionOutcome to a bool. Completed and
-// AlreadyAbsent mean the target is gone; everything else means it is not.
+// deletionCompleted maps a proto DeletionOutcome to a bool. Completed,
+// Accepted (async), and AlreadyAbsent all mean the server acknowledged the
+// delete — the sandbox is gone or will be gone shortly.
 func deletionCompleted(o pb.DeletionOutcome) bool {
 	switch o {
 	case pb.DeletionOutcome_DELETION_OUTCOME_COMPLETED,
+		pb.DeletionOutcome_DELETION_OUTCOME_ACCEPTED,
 		pb.DeletionOutcome_DELETION_OUTCOME_ALREADY_ABSENT:
 		return true
 	default:

@@ -79,7 +79,7 @@ func Create(ctx context.Context, d CreateDeps, r *CreateRequest, ttyResolved boo
 			sink = nopSink{}
 		}
 		sink.Header(sb.Name)
-		if _, werr := WatchUntilReady(ctx, d.GW, sb.ID, phaseFromStatus(sb), d.IdleTimeout, r.GPU != nil, sink, d.Clock); werr != nil {
+		if _, werr := WatchUntilReady(ctx, d.GW, r.Workspace, sb.Name, phaseFromStatus(sb), d.IdleTimeout, r.GPU != nil, sink, d.Clock); werr != nil {
 			return nil, werr
 		}
 		if fresh, gerr := d.GW.GetSandbox(ctx, r.Workspace, sb.Name); gerr == nil {

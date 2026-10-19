@@ -5,6 +5,7 @@ import (
 	"io"
 	"time"
 
+	dm "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 	"google.golang.org/protobuf/types/known/durationpb"
 
@@ -14,16 +15,17 @@ import (
 // buildExecStartInput builds the first bidi message for interactive exec
 // (run.rs:1846-1861): a Start payload carrying the exec request with tty=true,
 // empty stdin, and the initial cols/rows. Pure.
-func buildExecStartInput(sandboxID string, r *ExecRequest) *pb.ExecSandboxInput {
+func buildExecStartInput(workspace, sandboxName string, r *ExecRequest) *pb.ExecSandboxInput {
 	req := &pb.ExecSandboxRequest{
-		Sandbox:     sandboxID,
-		Command:     r.Command,
-		Workdir:     r.Workdir,
-		Environment: r.Env,
-		Stdin:       nil,
-		Tty:         true,
-		Cols:        r.Cols,
-		Rows:        r.Rows,
+		WorkspaceScope: &dm.WorkspaceSelector{Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace}},
+		Sandbox:        sandboxName,
+		Command:        r.Command,
+		Workdir:        r.Workdir,
+		Environment:    r.Env,
+		Stdin:          nil,
+		Tty:            true,
+		Cols:           r.Cols,
+		Rows:           r.Rows,
 	}
 	if r.Timeout > 0 {
 		req.ExecutionTimeout = durationpb.New(time.Duration(r.Timeout) * time.Second)
@@ -56,15 +58,15 @@ type ExecInteractiveDeps struct {
 // and returns the remote exit code. It opens the bidi stream, sends the Start
 // message, pumps stdin as Stdin chunks and resize events as Resize messages, and
 // reads the output stream until Exit (which breaks) or EOF (run.rs:1828-1957).
-// The caller has already resolved the sandbox id, put the terminal in raw mode,
+// The caller has already resolved the sandbox name, put the terminal in raw mode,
 // and supplies the resize channel; this function is the thin stream shell.
-func ExecInteractive(ctx context.Context, d ExecInteractiveDeps, sandboxID string, r *ExecRequest) (int, error) {
+func ExecInteractive(ctx context.Context, d ExecInteractiveDeps, r *ExecRequest) (int, error) {
 	bidi, err := d.GW.ExecSandboxInteractive(ctx)
 	if err != nil {
 		return 0, err
 	}
 
-	if err := bidi.Send(buildExecStartInput(sandboxID, r)); err != nil {
+	if err := bidi.Send(buildExecStartInput(r.Workspace, r.Name, r)); err != nil {
 		return 0, err
 	}
 

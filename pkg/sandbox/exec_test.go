@@ -60,9 +60,12 @@ func TestBuildExecRequest(t *testing.T) {
 		Cols:    120,
 		Rows:    40,
 	}
-	req := buildExecRequest("sb-123", r)
-	if req.Sandbox != "sb-123" || req.Workdir != "/work" {
+	req := buildExecRequest("default", "demo", r)
+	if req.Sandbox != "demo" || req.Workdir != "/work" {
 		t.Errorf("scalar fields: %+v", req)
+	}
+	if req.WorkspaceScope == nil || req.WorkspaceScope.GetWorkspace() != "default" {
+		t.Errorf("workspace scope: %+v", req.WorkspaceScope)
 	}
 	if req.ExecutionTimeout == nil || req.ExecutionTimeout.Seconds != 30 {
 		t.Errorf("execution timeout: %+v", req.ExecutionTimeout)
@@ -77,7 +80,7 @@ func TestBuildExecRequest(t *testing.T) {
 
 func TestBuildExecRequest_ZeroTimeout(t *testing.T) {
 	r := &ExecRequest{Command: []string{"ls"}, Timeout: 0}
-	req := buildExecRequest("sb-1", r)
+	req := buildExecRequest("default", "sb-1", r)
 	if req.ExecutionTimeout != nil {
 		t.Errorf("zero timeout should produce nil ExecutionTimeout, got %v", req.ExecutionTimeout)
 	}

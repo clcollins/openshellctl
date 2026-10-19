@@ -8,6 +8,7 @@ import (
 	"time"
 
 	types "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
+	dm "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
@@ -96,9 +97,10 @@ type LogsRequest struct {
 
 // buildWatchLogsRequest builds the raw WatchSandboxRequest for --tail
 // (run.rs:6957-6983). Pure.
-func buildWatchLogsRequest(sandboxID string, r *LogsRequest) *pb.WatchSandboxRequest {
+func buildWatchLogsRequest(workspace, sandboxName string, r *LogsRequest) *pb.WatchSandboxRequest {
 	req := &pb.WatchSandboxRequest{
-		Sandbox:        sandboxID,
+		WorkspaceScope: &dm.WorkspaceSelector{Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace}},
+		Sandbox:        sandboxName,
 		FollowStatus:   false,
 		FollowLogs:     true,
 		FollowEvents:   false,
@@ -152,16 +154,16 @@ type LogsDeps struct {
 // prints it, emitting the buffer-truncated warning when applicable (run.rs:
 // 6911-7013, A.9). The caller has resolved the sandbox id/name and normalised
 // the request (since computed, sources filtered, level upper-cased).
-func Logs(ctx context.Context, d LogsDeps, sandboxID string, r *LogsRequest) error {
+func Logs(ctx context.Context, d LogsDeps, r *LogsRequest) error {
 	if r.Tail {
-		return tailLogs(ctx, d, sandboxID, r)
+		return tailLogs(ctx, d, r)
 	}
 	return fetchLogs(ctx, d, r)
 }
 
 // tailLogs streams live logs, printing only Log payloads (run.rs:6957-6983).
-func tailLogs(ctx context.Context, d LogsDeps, sandboxID string, r *LogsRequest) error {
-	stream, err := d.GW.WatchSandbox(ctx, buildWatchLogsRequest(sandboxID, r))
+func tailLogs(ctx context.Context, d LogsDeps, r *LogsRequest) error {
+	stream, err := d.GW.WatchSandbox(ctx, buildWatchLogsRequest(r.Workspace, r.Name, r))
 	if err != nil {
 		return err
 	}
