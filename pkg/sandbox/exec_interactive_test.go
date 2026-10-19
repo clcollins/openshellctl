@@ -34,6 +34,18 @@ func TestBuildExecStartInput(t *testing.T) {
 	}
 }
 
+func TestBuildExecStartInput_ZeroTimeout(t *testing.T) {
+	r := &ExecRequest{Command: []string{"bash"}, Timeout: 0, Cols: 80, Rows: 24}
+	in := buildExecStartInput("sb-1", r)
+	start := in.GetStart()
+	if start == nil {
+		t.Fatal("expected Start payload")
+	}
+	if start.ExecutionTimeout != nil {
+		t.Errorf("zero timeout should produce nil ExecutionTimeout, got %v", start.ExecutionTimeout)
+	}
+}
+
 func TestStdinAndResizeInput(t *testing.T) {
 	if got := stdinInput([]byte("xyz")).GetStdin(); string(got) != "xyz" {
 		t.Errorf("stdinInput = %q", got)

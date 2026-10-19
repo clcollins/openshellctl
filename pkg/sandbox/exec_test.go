@@ -75,6 +75,14 @@ func TestBuildExecRequest(t *testing.T) {
 	}
 }
 
+func TestBuildExecRequest_ZeroTimeout(t *testing.T) {
+	r := &ExecRequest{Command: []string{"ls"}, Timeout: 0}
+	req := buildExecRequest("sb-1", r)
+	if req.ExecutionTimeout != nil {
+		t.Errorf("zero timeout should produce nil ExecutionTimeout, got %v", req.ExecutionTimeout)
+	}
+}
+
 // execStream is a scripted one-shot exec stream.
 type execStream struct {
 	events []*pb.ExecSandboxEvent
