@@ -3,8 +3,10 @@ package sandbox
 import (
 	"context"
 	"io"
+	"time"
 
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/openshift-online/openshellctl/pkg/gateway"
 )
@@ -13,20 +15,21 @@ import (
 // (run.rs:1846-1861): a Start payload carrying the exec request with tty=true,
 // empty stdin, and the initial cols/rows. Pure.
 func buildExecStartInput(sandboxID string, r *ExecRequest) *pb.ExecSandboxInput {
+	req := &pb.ExecSandboxRequest{
+		Sandbox:     sandboxID,
+		Command:     r.Command,
+		Workdir:     r.Workdir,
+		Environment: r.Env,
+		Stdin:       nil,
+		Tty:         true,
+		Cols:        r.Cols,
+		Rows:        r.Rows,
+	}
+	if r.Timeout > 0 {
+		req.ExecutionTimeout = durationpb.New(time.Duration(r.Timeout) * time.Second)
+	}
 	return &pb.ExecSandboxInput{
-		Payload: &pb.ExecSandboxInput_Start{
-			Start: &pb.ExecSandboxRequest{
-				SandboxId:      sandboxID,
-				Command:        r.Command,
-				Workdir:        r.Workdir,
-				Environment:    r.Env,
-				TimeoutSeconds: r.Timeout,
-				Stdin:          nil,
-				Tty:            true,
-				Cols:           r.Cols,
-				Rows:           r.Rows,
-			},
-		},
+		Payload: &pb.ExecSandboxInput_Start{Start: req},
 	}
 }
 

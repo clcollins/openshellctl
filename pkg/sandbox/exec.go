@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"time"
 
 	types "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
+	"google.golang.org/protobuf/types/known/durationpb"
 
 	"github.com/openshift-online/openshellctl/pkg/gateway"
 )
@@ -54,17 +56,20 @@ func ErrSandboxNotReady(name string, phase types.SandboxPhase) error {
 
 // buildExecRequest builds the raw ExecSandboxRequest (run.rs:1478-1487). Pure.
 func buildExecRequest(sandboxID string, r *ExecRequest) *pb.ExecSandboxRequest {
-	return &pb.ExecSandboxRequest{
-		SandboxId:      sandboxID,
-		Command:        r.Command,
-		Workdir:        r.Workdir,
-		Environment:    r.Env,
-		TimeoutSeconds: r.Timeout,
-		Stdin:          r.Stdin,
-		Tty:            r.TTY,
-		Cols:           r.Cols,
-		Rows:           r.Rows,
+	req := &pb.ExecSandboxRequest{
+		Sandbox:     sandboxID,
+		Command:     r.Command,
+		Workdir:     r.Workdir,
+		Environment: r.Env,
+		Stdin:       r.Stdin,
+		Tty:         r.TTY,
+		Cols:        r.Cols,
+		Rows:        r.Rows,
 	}
+	if r.Timeout > 0 {
+		req.ExecutionTimeout = durationpb.New(time.Duration(r.Timeout) * time.Second)
+	}
+	return req
 }
 
 // ExecDeps are the dependencies for Exec.

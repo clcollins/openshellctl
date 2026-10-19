@@ -1,5 +1,5 @@
 {
-  "note": "openshellctl-only flags not present in the upstream openshell CLI at the pinned version. See hack/parity/sandbox_flags_v0.0.116.json for upstream flags. parity_test.go confirms every flag on an implemented subcommand (see implementedSubcommands in parity_test.go) appears in exactly one of the two files.",
+  "note": "openshellctl-only flags not present in the upstream openshell CLI at the pinned version. See hack/parity/sandbox_flags_v0.1.3.json for upstream flags. parity_test.go confirms every flag on an implemented subcommand (see implementedSubcommands in parity_test.go) appears in exactly one of the two files.",
   "subcommands": {
     "create": [
       {"long": "file", "short": "f", "type": "string", "note": "manifest input (- for stdin, or an http(s):// URL as of ROSAENG-74491 — openshellctl-only, no upstream Rust CLI equivalent); docs/plans/0002-openshell-go-client-plan.md:585"},

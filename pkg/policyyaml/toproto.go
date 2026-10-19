@@ -77,9 +77,9 @@ func endpointToSDK(e NetworkEndpointDef) types.PolicyNetworkEndpoint {
 		Port:                         port,
 		Ports:                        ports,
 		Protocol:                     e.Protocol,
-		TLS:                          e.TLS,
-		Enforcement:                  e.Enforcement,
-		Access:                       e.Access,
+		TLS:                          tlsModeToSDK(e.TLS),
+		Enforcement:                  enforcementToSDK(e.Enforcement),
+		Access:                       accessPresetToSDK(e.Access),
 		AllowedIPs:                   e.AllowedIPs,
 		AllowEncodedSlash:            e.AllowEncodedSlash,
 		WebsocketCredentialRewrite:   e.WebsocketCredentialRewrite,
@@ -275,4 +275,78 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func tlsModeToSDK(s string) types.NetworkTLSMode {
+	switch s {
+	case "skip":
+		return types.NetworkTLSModeSkip
+	case "terminate":
+		return types.NetworkTLSModeTerminate
+	case "passthrough":
+		return types.NetworkTLSModePassthrough
+	default:
+		return types.NetworkTLSModeUnspecified
+	}
+}
+
+func tlsModeFromSDK(m types.NetworkTLSMode) string {
+	switch m {
+	case types.NetworkTLSModeSkip:
+		return "skip"
+	case types.NetworkTLSModeTerminate:
+		return "terminate"
+	case types.NetworkTLSModePassthrough:
+		return "passthrough"
+	default:
+		return ""
+	}
+}
+
+func enforcementToSDK(s string) types.NetworkEnforcementMode {
+	switch s {
+	case "enforce":
+		return types.NetworkEnforcementModeEnforce
+	case "audit":
+		return types.NetworkEnforcementModeAudit
+	default:
+		return types.NetworkEnforcementModeUnspecified
+	}
+}
+
+func enforcementFromSDK(m types.NetworkEnforcementMode) string {
+	switch m {
+	case types.NetworkEnforcementModeEnforce:
+		return "enforce"
+	case types.NetworkEnforcementModeAudit:
+		return "audit"
+	default:
+		return ""
+	}
+}
+
+func accessPresetToSDK(s string) types.NetworkAccessPreset {
+	switch s {
+	case "read_only":
+		return types.NetworkAccessPresetReadOnly
+	case "read_write":
+		return types.NetworkAccessPresetReadWrite
+	case "full":
+		return types.NetworkAccessPresetFull
+	default:
+		return types.NetworkAccessPresetUnspecified
+	}
+}
+
+func accessPresetFromSDK(m types.NetworkAccessPreset) string {
+	switch m {
+	case types.NetworkAccessPresetReadOnly:
+		return "read_only"
+	case types.NetworkAccessPresetReadWrite:
+		return "read_write"
+	case types.NetworkAccessPresetFull:
+		return "full"
+	default:
+		return ""
+	}
 }

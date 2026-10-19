@@ -134,8 +134,8 @@ network_policies:
 		t.Error("process not converted")
 	}
 	e := p.NetworkPolicies["p"].Endpoints[0]
-	if e.TLS != "terminate" || e.Enforcement != "enforce" || !e.AllowEncodedSlash {
-		t.Errorf("endpoint scalars wrong: %+v", e)
+	if e.TLS != types.NetworkTLSModeTerminate || e.Enforcement != types.NetworkEnforcementModeEnforce || !e.AllowEncodedSlash {
+		t.Errorf("endpoint scalars wrong: TLS=%v Enforcement=%v", e.TLS, e.Enforcement)
 	}
 	if e.CredentialBinding == nil || e.CredentialBinding.Provider != "my-provider" {
 		t.Error("credential_binding not converted")
@@ -145,6 +145,83 @@ network_policies:
 	}
 	if len(e.AllowedIPs) != 1 || e.AllowedIPs[0] != "10.0.0.1" {
 		t.Errorf("allowed_ips wrong: %v", e.AllowedIPs)
+	}
+}
+
+func TestTLSModeConversion(t *testing.T) {
+	cases := []struct {
+		str  string
+		want types.NetworkTLSMode
+	}{
+		{"", types.NetworkTLSModeUnspecified},
+		{"skip", types.NetworkTLSModeSkip},
+		{"terminate", types.NetworkTLSModeTerminate},
+		{"passthrough", types.NetworkTLSModePassthrough},
+		{"unknown", types.NetworkTLSModeUnspecified},
+	}
+	for _, tc := range cases {
+		if got := tlsModeToSDK(tc.str); got != tc.want {
+			t.Errorf("tlsModeToSDK(%q) = %v, want %v", tc.str, got, tc.want)
+		}
+	}
+	for _, tc := range cases {
+		if tc.str == "unknown" {
+			continue
+		}
+		if got := tlsModeFromSDK(tc.want); got != tc.str {
+			t.Errorf("tlsModeFromSDK(%v) = %q, want %q", tc.want, got, tc.str)
+		}
+	}
+}
+
+func TestEnforcementModeConversion(t *testing.T) {
+	cases := []struct {
+		str  string
+		want types.NetworkEnforcementMode
+	}{
+		{"", types.NetworkEnforcementModeUnspecified},
+		{"enforce", types.NetworkEnforcementModeEnforce},
+		{"audit", types.NetworkEnforcementModeAudit},
+		{"unknown", types.NetworkEnforcementModeUnspecified},
+	}
+	for _, tc := range cases {
+		if got := enforcementToSDK(tc.str); got != tc.want {
+			t.Errorf("enforcementToSDK(%q) = %v, want %v", tc.str, got, tc.want)
+		}
+	}
+	for _, tc := range cases {
+		if tc.str == "unknown" {
+			continue
+		}
+		if got := enforcementFromSDK(tc.want); got != tc.str {
+			t.Errorf("enforcementFromSDK(%v) = %q, want %q", tc.want, got, tc.str)
+		}
+	}
+}
+
+func TestAccessPresetConversion(t *testing.T) {
+	cases := []struct {
+		str  string
+		want types.NetworkAccessPreset
+	}{
+		{"", types.NetworkAccessPresetUnspecified},
+		{"read_only", types.NetworkAccessPresetReadOnly},
+		{"read_write", types.NetworkAccessPresetReadWrite},
+		{"full", types.NetworkAccessPresetFull},
+		{"unknown", types.NetworkAccessPresetUnspecified},
+	}
+	for _, tc := range cases {
+		if got := accessPresetToSDK(tc.str); got != tc.want {
+			t.Errorf("accessPresetToSDK(%q) = %v, want %v", tc.str, got, tc.want)
+		}
+	}
+	for _, tc := range cases {
+		if tc.str == "unknown" {
+			continue
+		}
+		if got := accessPresetFromSDK(tc.want); got != tc.str {
+			t.Errorf("accessPresetFromSDK(%v) = %q, want %q", tc.want, got, tc.str)
+		}
 	}
 }
 

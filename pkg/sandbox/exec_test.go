@@ -61,8 +61,11 @@ func TestBuildExecRequest(t *testing.T) {
 		Rows:    40,
 	}
 	req := buildExecRequest("sb-123", r)
-	if req.SandboxId != "sb-123" || req.Workdir != "/work" || req.TimeoutSeconds != 30 {
+	if req.Sandbox != "sb-123" || req.Workdir != "/work" {
 		t.Errorf("scalar fields: %+v", req)
+	}
+	if req.ExecutionTimeout == nil || req.ExecutionTimeout.Seconds != 30 {
+		t.Errorf("execution timeout: %+v", req.ExecutionTimeout)
 	}
 	if !req.Tty || req.Cols != 120 || req.Rows != 40 {
 		t.Errorf("tty/size: %+v", req)

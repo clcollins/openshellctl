@@ -20,14 +20,17 @@ func TestBuildExecStartInput(t *testing.T) {
 	if start == nil {
 		t.Fatal("expected Start payload")
 	}
-	if start.SandboxId != "sb-9" || !start.Tty || start.Cols != 100 || start.Rows != 30 {
+	if start.Sandbox != "sb-9" || !start.Tty || start.Cols != 100 || start.Rows != 30 {
 		t.Errorf("start = %+v", start)
 	}
 	if len(start.Stdin) != 0 {
 		t.Errorf("start stdin should be empty, got %q", start.Stdin)
 	}
-	if start.Workdir != "/w" || start.TimeoutSeconds != 5 || start.Environment["A"] != "B" {
+	if start.Workdir != "/w" || start.Environment["A"] != "B" {
 		t.Errorf("start fields = %+v", start)
+	}
+	if start.ExecutionTimeout == nil || start.ExecutionTimeout.Seconds != 5 {
+		t.Errorf("execution timeout: %+v", start.ExecutionTimeout)
 	}
 }
 

@@ -98,7 +98,7 @@ func WatchUntilReady(ctx context.Context, gw gateway.Gateway, id string, initial
 	}
 
 	req := &pb.WatchSandboxRequest{
-		Id:             id,
+		Sandbox:        id,
 		FollowStatus:   true,
 		FollowLogs:     true,
 		FollowEvents:   true,

@@ -43,7 +43,7 @@ func documentedFlagNames(t *testing.T, subcommand string) map[string]bool {
 	t.Helper()
 	names := map[string]bool{}
 	for _, doc := range []parityDoc{
-		loadParityDoc(t, "../../hack/parity/sandbox_flags_v0.0.116.json"),
+		loadParityDoc(t, "../../hack/parity/sandbox_flags_v0.1.3.json"),
 		loadParityDoc(t, "../../hack/parity/openshellctl_extensions.json"),
 	} {
 		for _, f := range doc.Subcommands[subcommand] {
@@ -88,7 +88,7 @@ func TestParity_CreateFlagsFullyDocumented(t *testing.T) {
 	for name := range actual {
 		if !documented[name] {
 			t.Errorf("flag --%s is registered on `sandbox create` but not documented in "+
-				"hack/parity/sandbox_flags_v0.0.116.json or hack/parity/openshellctl_extensions.json", name)
+				"hack/parity/sandbox_flags_v0.1.3.json or hack/parity/openshellctl_extensions.json", name)
 		}
 	}
 	for name := range documented {

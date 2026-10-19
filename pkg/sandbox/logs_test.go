@@ -11,6 +11,7 @@ import (
 	types "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 	"go.uber.org/mock/gomock"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/openshift-online/openshellctl/pkg/gateway/mock"
 )
@@ -87,35 +88,53 @@ func TestBuildWatchLogsRequest(t *testing.T) {
 		Sources: []string{"gateway"},
 		Level:   "WARN",
 	})
-	if req.Id != "sb-1" || !req.FollowLogs || req.FollowStatus || req.FollowEvents {
+	if req.Sandbox != "sb-1" || !req.FollowLogs || req.FollowStatus || req.FollowEvents {
 		t.Errorf("follow flags: %+v", req)
 	}
-	if req.LogTailLines != 50 || req.LogSinceMs != 12345 || req.LogMinLevel != "WARN" {
+	if req.LogTailLines != 50 || req.LogMinLevel != "WARN" {
 		t.Errorf("log fields: %+v", req)
+	}
+	if req.SinceTime == nil || !req.SinceTime.AsTime().Equal(time.UnixMilli(12345)) {
+		t.Errorf("since time: %+v", req.SinceTime)
 	}
 	if len(req.LogSources) != 1 || req.LogSources[0] != "gateway" {
 		t.Errorf("sources: %+v", req.LogSources)
 	}
 }
 
+func TestBuildWatchLogsRequest_NoSince(t *testing.T) {
+	req := buildWatchLogsRequest("sb-1", &LogsRequest{Lines: 50})
+	if req.SinceTime != nil {
+		t.Errorf("sinceMs=0 should produce nil SinceTime, got %+v", req.SinceTime)
+	}
+}
+
 func TestLogLineFromProto(t *testing.T) {
+	et := timestamppb.New(time.UnixMilli(1000))
 	l := logLineFromProto(&pb.SandboxLogLine{
-		TimestampMs: 1000,
-		Level:       "INFO",
-		Target:      "svc",
-		Message:     "hello",
-		Source:      "sandbox",
-		Fields:      map[string]string{"k": "v"},
+		EventTime: et,
+		Level:     "INFO",
+		Target:    "svc",
+		Message:   "hello",
+		Source:    "sandbox",
+		Fields:    map[string]string{"k": "v"},
 	})
 	if !l.Timestamp.Equal(time.UnixMilli(1000)) || l.Level != "INFO" || l.Message != "hello" || l.Source != "sandbox" {
 		t.Errorf("converted = %+v", l)
 	}
 }
 
+func TestLogLineFromProto_NilEventTime(t *testing.T) {
+	l := logLineFromProto(&pb.SandboxLogLine{Level: "WARN", Message: "m"})
+	if !l.Timestamp.IsZero() {
+		t.Errorf("nil EventTime should produce zero time, got %v", l.Timestamp)
+	}
+}
+
 // logStream is a scripted watch stream carrying only Log payloads.
 func logEvent(msg string) *pb.SandboxStreamEvent {
 	return &pb.SandboxStreamEvent{Payload: &pb.SandboxStreamEvent_Log{
-		Log: &pb.SandboxLogLine{TimestampMs: 1000, Level: "INFO", Target: "t", Message: msg, Source: "sandbox"},
+		Log: &pb.SandboxLogLine{EventTime: timestamppb.New(time.UnixMilli(1000)), Level: "INFO", Target: "t", Message: msg, Source: "sandbox"},
 	}}
 }
 

@@ -68,7 +68,7 @@ func watchUntilPhase(ctx context.Context, gw gateway.Gateway, id string, target 
 	watchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	stream, err := gw.WatchSandbox(watchCtx, &pb.WatchSandboxRequest{Id: id, FollowStatus: true})
+	stream, err := gw.WatchSandbox(watchCtx, &pb.WatchSandboxRequest{Sandbox: id, FollowStatus: true})
 	if err != nil {
 		return nil, err
 	}

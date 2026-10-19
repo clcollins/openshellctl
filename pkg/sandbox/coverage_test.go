@@ -47,6 +47,7 @@ func TestPhaseMappingRoundTrip(t *testing.T) {
 		{pb.SandboxPhase_SANDBOX_PHASE_STOPPING, types.SandboxStopping},
 		{pb.SandboxPhase_SANDBOX_PHASE_STOPPED, types.SandboxStopped},
 		{pb.SandboxPhase_SANDBOX_PHASE_STARTING, types.SandboxStarting},
+		{pb.SandboxPhase_SANDBOX_PHASE_COMPLETED, types.SandboxCompleted},
 		{pb.SandboxPhase_SANDBOX_PHASE_UNKNOWN, types.SandboxUnknown},
 	}
 	for _, tc := range cases {

@@ -50,7 +50,6 @@ func newSandboxListCommand() *cobra.Command {
 	var (
 		format        string
 		limit         int
-		offset        int
 		ids           bool
 		names         bool
 		selector      string
@@ -66,8 +65,7 @@ func newSandboxListCommand() *cobra.Command {
 			}
 			return withGateway(cmd, func(gw gateway.Gateway) error {
 				opts := types.ListOptions{
-					Limit:         limit,
-					Offset:        offset,
+					PageSize:      limit,
 					LabelSelector: selector,
 					AllWorkspaces: allWorkspaces,
 				}
@@ -93,8 +91,7 @@ func newSandboxListCommand() *cobra.Command {
 	}
 	f := c.Flags()
 	f.StringVarP(&format, "output", "o", "table", "output format: table|json|yaml")
-	f.IntVar(&limit, "limit", 100, "max results")
-	f.IntVar(&offset, "offset", 0, "result offset")
+	f.IntVar(&limit, "limit", 100, "page size for sandbox listing")
 	f.BoolVar(&ids, "ids", false, "print ids only")
 	f.BoolVar(&names, "names", false, "print names only")
 	f.StringVar(&selector, "selector", "", "label selector")

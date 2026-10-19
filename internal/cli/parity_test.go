@@ -9,7 +9,7 @@ import (
 )
 
 // the13Subcommands is the set of leaf subcommands openshellctl must expose for
-// parity with `openshell` at v0.0.116 (spec §6). "provider" counts as one entry
+// parity with `openshell` at v0.1.3 (spec §6). "provider" counts as one entry
 // here (its list/attach/detach children are checked separately below); "logs"
 // is top-level. Total = 13.
 var the13Subcommands = []string{

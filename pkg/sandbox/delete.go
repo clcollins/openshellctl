@@ -52,7 +52,7 @@ func (e *ErrDeleteTimeout) Error() string {
 func Delete(ctx context.Context, gw gateway.Gateway, cfgw gatewayconfig.Writer, gatewayName string, r DeleteRequest, report func(DeleteOutcome)) error {
 	names := r.Names
 	if r.All {
-		list, err := gw.ListSandboxes(ctx, r.Workspace, types.ListOptions{Limit: 1000})
+		list, err := gw.ListSandboxes(ctx, r.Workspace, types.ListOptions{})
 		if err != nil {
 			return err
 		}
