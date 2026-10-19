@@ -150,22 +150,33 @@ network_policies:
 
 func TestTLSModeConversion(t *testing.T) {
 	cases := []struct {
-		str  string
-		want types.NetworkTLSMode
+		str     string
+		want    types.NetworkTLSMode
+		wantErr bool
 	}{
-		{"", types.NetworkTLSModeUnspecified},
-		{"skip", types.NetworkTLSModeSkip},
-		{"terminate", types.NetworkTLSModeTerminate},
-		{"passthrough", types.NetworkTLSModePassthrough},
-		{"unknown", types.NetworkTLSModeUnspecified},
+		{"", types.NetworkTLSModeUnspecified, false},
+		{"skip", types.NetworkTLSModeSkip, false},
+		{"terminate", types.NetworkTLSModeTerminate, false},
+		{"passthrough", types.NetworkTLSModePassthrough, false},
+		{"unknown", 0, true},
 	}
 	for _, tc := range cases {
-		if got := tlsModeToSDK(tc.str); got != tc.want {
+		got, err := tlsModeToSDK(tc.str)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("tlsModeToSDK(%q) should error", tc.str)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("tlsModeToSDK(%q) unexpected error: %v", tc.str, err)
+		}
+		if got != tc.want {
 			t.Errorf("tlsModeToSDK(%q) = %v, want %v", tc.str, got, tc.want)
 		}
 	}
 	for _, tc := range cases {
-		if tc.str == "unknown" {
+		if tc.wantErr || tc.str == "" {
 			continue
 		}
 		if got := tlsModeFromSDK(tc.want); got != tc.str {
@@ -176,21 +187,32 @@ func TestTLSModeConversion(t *testing.T) {
 
 func TestEnforcementModeConversion(t *testing.T) {
 	cases := []struct {
-		str  string
-		want types.NetworkEnforcementMode
+		str     string
+		want    types.NetworkEnforcementMode
+		wantErr bool
 	}{
-		{"", types.NetworkEnforcementModeUnspecified},
-		{"enforce", types.NetworkEnforcementModeEnforce},
-		{"audit", types.NetworkEnforcementModeAudit},
-		{"unknown", types.NetworkEnforcementModeUnspecified},
+		{"", types.NetworkEnforcementModeUnspecified, false},
+		{"enforce", types.NetworkEnforcementModeEnforce, false},
+		{"audit", types.NetworkEnforcementModeAudit, false},
+		{"unknown", 0, true},
 	}
 	for _, tc := range cases {
-		if got := enforcementToSDK(tc.str); got != tc.want {
+		got, err := enforcementToSDK(tc.str)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("enforcementToSDK(%q) should error", tc.str)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("enforcementToSDK(%q) unexpected error: %v", tc.str, err)
+		}
+		if got != tc.want {
 			t.Errorf("enforcementToSDK(%q) = %v, want %v", tc.str, got, tc.want)
 		}
 	}
 	for _, tc := range cases {
-		if tc.str == "unknown" {
+		if tc.wantErr || tc.str == "" {
 			continue
 		}
 		if got := enforcementFromSDK(tc.want); got != tc.str {
@@ -201,22 +223,35 @@ func TestEnforcementModeConversion(t *testing.T) {
 
 func TestAccessPresetConversion(t *testing.T) {
 	cases := []struct {
-		str  string
-		want types.NetworkAccessPreset
+		str     string
+		want    types.NetworkAccessPreset
+		wantErr bool
 	}{
-		{"", types.NetworkAccessPresetUnspecified},
-		{"read_only", types.NetworkAccessPresetReadOnly},
-		{"read_write", types.NetworkAccessPresetReadWrite},
-		{"full", types.NetworkAccessPresetFull},
-		{"unknown", types.NetworkAccessPresetUnspecified},
+		{"", types.NetworkAccessPresetUnspecified, false},
+		{"read-only", types.NetworkAccessPresetReadOnly, false},
+		{"read-write", types.NetworkAccessPresetReadWrite, false},
+		{"full", types.NetworkAccessPresetFull, false},
+		{"unknown", 0, true},
+		{"read_only", 0, true},
+		{"read_write", 0, true},
 	}
 	for _, tc := range cases {
-		if got := accessPresetToSDK(tc.str); got != tc.want {
+		got, err := accessPresetToSDK(tc.str)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("accessPresetToSDK(%q) should error", tc.str)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("accessPresetToSDK(%q) unexpected error: %v", tc.str, err)
+		}
+		if got != tc.want {
 			t.Errorf("accessPresetToSDK(%q) = %v, want %v", tc.str, got, tc.want)
 		}
 	}
 	for _, tc := range cases {
-		if tc.str == "unknown" {
+		if tc.wantErr || tc.str == "" {
 			continue
 		}
 		if got := accessPresetFromSDK(tc.want); got != tc.str {
