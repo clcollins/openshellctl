@@ -69,7 +69,7 @@ func newSandboxExecCommand() *cobra.Command {
 
 				// Interactive path only when --tty forced AND stdin is a real terminal.
 				if ttyOverride != nil && *ttyOverride && stdinTTY {
-					return runExecInteractive(cmd, gw, sbName, req)
+					return runExecInteractive(cmd, gw, req)
 				}
 				return runExecStreaming(cmd, gw, req, stdinTTY)
 			})
@@ -113,9 +113,8 @@ func runExecStreaming(cmd *cobra.Command, gw gateway.Gateway, req *sandbox.ExecR
 
 // runExecInteractive runs the bidi interactive exec with the local terminal in
 // raw mode and SIGWINCH forwarding.
-func runExecInteractive(cmd *cobra.Command, gw gateway.Gateway, sbName string, req *sandbox.ExecRequest) error {
-	// Resolve the sandbox id + phase up-front (mirrors the streaming path's check).
-	sb, err := gw.GetSandbox(cmd.Context(), req.Workspace, sbName)
+func runExecInteractive(cmd *cobra.Command, gw gateway.Gateway, req *sandbox.ExecRequest) error {
+	sb, err := gw.GetSandbox(cmd.Context(), req.Workspace, req.Name)
 	if err != nil {
 		return err
 	}
@@ -123,7 +122,7 @@ func runExecInteractive(cmd *cobra.Command, gw gateway.Gateway, sbName string, r
 		return fmt.Errorf("sandbox not found")
 	}
 	if !isReady(sb) {
-		return sandbox.ErrSandboxNotReady(sbName, sb.Status.Phase)
+		return sandbox.ErrSandboxNotReady(req.Name, sb.Status.Phase)
 	}
 
 	cols, rows := terminalSize(int(os.Stdout.Fd()))
@@ -139,7 +138,7 @@ func runExecInteractive(cmd *cobra.Command, gw gateway.Gateway, sbName string, r
 		Stdout:  cmd.OutOrStdout(),
 		Stderr:  cmd.ErrOrStderr(),
 		Resizes: resizes,
-	}, sb.ID, req)
+	}, req)
 	if err != nil {
 		return err
 	}

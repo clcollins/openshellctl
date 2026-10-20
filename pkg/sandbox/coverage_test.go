@@ -18,7 +18,7 @@ func TestCreate_WithWatch(t *testing.T) {
 	gw := mock.NewMockGateway(ctrl)
 	gw.EXPECT().CreateSandbox(gomock.Any(), "default", "sb", gomock.Any(), gomock.Any()).
 		Return(&types.Sandbox{ID: "id-1", Name: "sb", Status: types.SandboxStatus{Phase: types.SandboxProvisioning}}, nil)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING),
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_READY),
 	}}, nil)
@@ -47,6 +47,7 @@ func TestPhaseMappingRoundTrip(t *testing.T) {
 		{pb.SandboxPhase_SANDBOX_PHASE_STOPPING, types.SandboxStopping},
 		{pb.SandboxPhase_SANDBOX_PHASE_STOPPED, types.SandboxStopped},
 		{pb.SandboxPhase_SANDBOX_PHASE_STARTING, types.SandboxStarting},
+		{pb.SandboxPhase_SANDBOX_PHASE_COMPLETED, types.SandboxCompleted},
 		{pb.SandboxPhase_SANDBOX_PHASE_UNKNOWN, types.SandboxUnknown},
 	}
 	for _, tc := range cases {

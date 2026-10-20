@@ -9,6 +9,7 @@ import (
 
 	types "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
+	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/openshift-online/openshellctl/pkg/gateway"
 	"github.com/openshift-online/openshellctl/pkg/output"
@@ -95,26 +96,34 @@ type LogsRequest struct {
 
 // buildWatchLogsRequest builds the raw WatchSandboxRequest for --tail
 // (run.rs:6957-6983). Pure.
-func buildWatchLogsRequest(sandboxID string, r *LogsRequest) *pb.WatchSandboxRequest {
-	return &pb.WatchSandboxRequest{
-		Id:             sandboxID,
+func buildWatchLogsRequest(workspace, sandboxName string, r *LogsRequest) *pb.WatchSandboxRequest {
+	req := &pb.WatchSandboxRequest{
+		WorkspaceScope: workspaceScope(workspace),
+		Sandbox:        sandboxName,
 		FollowStatus:   false,
 		FollowLogs:     true,
 		FollowEvents:   false,
 		LogTailLines:   r.Lines,
 		EventTail:      0,
 		StopOnTerminal: false,
-		LogSinceMs:     r.SinceMs,
 		LogSources:     r.Sources,
 		LogMinLevel:    r.Level,
 	}
+	if r.SinceMs > 0 {
+		req.SinceTime = timestamppb.New(time.UnixMilli(r.SinceMs))
+	}
+	return req
 }
 
 // logLineFromProto converts a raw SandboxLogLine to the SDK types.LogLine that
 // output.FormatLogLine renders. Pure.
 func logLineFromProto(l *pb.SandboxLogLine) types.LogLine {
+	var ts time.Time
+	if et := l.GetEventTime(); et != nil {
+		ts = et.AsTime()
+	}
 	return types.LogLine{
-		Timestamp: time.UnixMilli(l.GetTimestampMs()),
+		Timestamp: ts,
 		Level:     l.GetLevel(),
 		Target:    l.GetTarget(),
 		Message:   l.GetMessage(),
@@ -144,16 +153,19 @@ type LogsDeps struct {
 // prints it, emitting the buffer-truncated warning when applicable (run.rs:
 // 6911-7013, A.9). The caller has resolved the sandbox id/name and normalised
 // the request (since computed, sources filtered, level upper-cased).
-func Logs(ctx context.Context, d LogsDeps, sandboxID string, r *LogsRequest) error {
+func Logs(ctx context.Context, d LogsDeps, r *LogsRequest) error {
+	if r.Workspace == "" {
+		return ErrEmptyWorkspace
+	}
 	if r.Tail {
-		return tailLogs(ctx, d, sandboxID, r)
+		return tailLogs(ctx, d, r)
 	}
 	return fetchLogs(ctx, d, r)
 }
 
 // tailLogs streams live logs, printing only Log payloads (run.rs:6957-6983).
-func tailLogs(ctx context.Context, d LogsDeps, sandboxID string, r *LogsRequest) error {
-	stream, err := d.GW.WatchSandbox(ctx, buildWatchLogsRequest(sandboxID, r))
+func tailLogs(ctx context.Context, d LogsDeps, r *LogsRequest) error {
+	stream, err := d.GW.WatchSandbox(ctx, buildWatchLogsRequest(r.Workspace, r.Name, r))
 	if err != nil {
 		return err
 	}

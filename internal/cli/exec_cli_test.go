@@ -141,7 +141,7 @@ func TestRunExecInteractive_NotReadyErrors(t *testing.T) {
 	cmd.SetErr(new(bytes.Buffer))
 
 	req := &sandbox.ExecRequest{Workspace: "default", Name: "demo", Command: []string{"bash"}}
-	err := runExecInteractive(cmd, gw, "demo", req)
+	err := runExecInteractive(cmd, gw, req)
 	if err == nil || !strings.Contains(err.Error(), "is not ready") {
 		t.Fatalf("err = %v, want not-ready", err)
 	}

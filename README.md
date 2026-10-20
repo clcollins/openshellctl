@@ -561,7 +561,7 @@ openshellctl sandbox list --all-workspaces
 openshellctl sandbox list --names          # one name per line
 openshellctl sandbox list --ids            # one ID per line
 openshellctl sandbox list --selector "gpu=true"
-openshellctl sandbox list --limit 10 --offset 20
+openshellctl sandbox list --limit 10
 ```
 
 | Flag | Description |
@@ -571,8 +571,7 @@ openshellctl sandbox list --limit 10 --offset 20
 | `--names` | Print names only (one per line) |
 | `--ids` | Print IDs only (one per line) |
 | `--selector` | Label selector filter |
-| `--limit` | Max results (default: 100) |
-| `--offset` | Result offset for pagination |
+| `--limit` | Page size for listing (default: 100) |
 
 ### `sandbox delete`
 

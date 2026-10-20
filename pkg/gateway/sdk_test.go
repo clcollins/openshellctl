@@ -182,13 +182,14 @@ func TestSDK_UpdateProviderNotFoundClassified(t *testing.T) {
 	}
 }
 
-// TestSDK_DeleteProviderIdempotent matches the vendored fake's documented
-// delete semantics (fake/provider.go: "The operation is idempotent") — there
-// is no NotFound path to classify here, unlike Create/Update/Get.
-func TestSDK_DeleteProviderIdempotent(t *testing.T) {
+// TestSDK_DeleteProviderMissing verifies that deleting a missing provider
+// returns a NotFoundError (0.1.x SDK changed from idempotent to NotFound).
+func TestSDK_DeleteProviderMissing(t *testing.T) {
 	c := newFakeGateway()
-	if err := c.DeleteProvider(context.Background(), "default", "ghost"); err != nil {
-		t.Fatalf("DeleteProvider on a missing name should be a no-op, got: %v", err)
+	err := c.DeleteProvider(context.Background(), "default", "ghost")
+	var nf *NotFoundError
+	if !errors.As(err, &nf) {
+		t.Fatalf("err = %v, want NotFoundError", err)
 	}
 }
 

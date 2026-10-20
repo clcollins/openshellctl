@@ -87,7 +87,7 @@ func TestLint_MiddlewareDuplicateOrder(t *testing.T) {
 func TestLint_TCPWithAccess(t *testing.T) {
 	p := &types.SandboxPolicy{NetworkPolicies: map[string]types.NetworkPolicyRule{
 		"p": {Name: "p", Endpoints: []types.PolicyNetworkEndpoint{
-			{Host: "h", Port: 443, Protocol: "tcp", Access: "full"},
+			{Host: "h", Port: 443, Protocol: "tcp", Access: types.NetworkAccessPresetFull},
 		}},
 	}}
 	errs := lintErrs(t, p)

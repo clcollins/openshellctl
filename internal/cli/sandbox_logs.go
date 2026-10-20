@@ -47,7 +47,6 @@ func newLogsCommand() *cobra.Command {
 					return err
 				}
 
-				// The raw watch path needs the sandbox id; GetLogs takes the name.
 				req := &sandbox.LogsRequest{
 					Workspace: ws,
 					Name:      sbName,
@@ -58,20 +57,11 @@ func newLogsCommand() *cobra.Command {
 					Level:     strings.ToUpper(level),
 				}
 
-				sandboxID := sbName
-				if tail {
-					sb, gerr := gw.GetSandbox(cmd.Context(), ws, sbName)
-					if gerr != nil {
-						return gerr
-					}
-					sandboxID = sb.ID
-				}
-
 				return sandbox.Logs(cmd.Context(), sandbox.LogsDeps{
 					GW:     gw,
 					Stdout: cmd.OutOrStdout(),
 					Stderr: cmd.ErrOrStderr(),
-				}, sandboxID, req)
+				}, req)
 			})
 		},
 	}

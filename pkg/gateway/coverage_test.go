@@ -114,6 +114,33 @@ func TestRawExecInteractive(t *testing.T) {
 	_, _ = stream.Recv()
 }
 
+func TestWorkspaceScope(t *testing.T) {
+	ws := workspaceScope("prod")
+	if got := ws.GetWorkspace(); got != "prod" {
+		t.Errorf("workspaceScope workspace = %q, want %q", got, "prod")
+	}
+}
+
+func TestDeletionCompleted(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome pb.DeletionOutcome
+		want    bool
+	}{
+		{"completed", pb.DeletionOutcome_DELETION_OUTCOME_COMPLETED, true},
+		{"already_absent", pb.DeletionOutcome_DELETION_OUTCOME_ALREADY_ABSENT, true},
+		{"accepted", pb.DeletionOutcome_DELETION_OUTCOME_ACCEPTED, true},
+		{"unspecified", pb.DeletionOutcome_DELETION_OUTCOME_UNSPECIFIED, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := deletionCompleted(tt.outcome); got != tt.want {
+				t.Errorf("deletionCompleted(%v) = %v, want %v", tt.outcome, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestUnderRoot(t *testing.T) {
 	if got := underRoot("", "mtls/ca.crt"); got != "mtls/ca.crt" {
 		t.Errorf("underRoot with empty root = %q", got)

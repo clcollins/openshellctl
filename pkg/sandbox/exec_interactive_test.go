@@ -15,19 +15,37 @@ import (
 
 func TestBuildExecStartInput(t *testing.T) {
 	r := &ExecRequest{Command: []string{"bash"}, Workdir: "/w", Timeout: 5, Env: map[string]string{"A": "B"}, Cols: 100, Rows: 30}
-	in := buildExecStartInput("sb-9", r)
+	in := buildExecStartInput("default", "sb-9", r)
 	start := in.GetStart()
 	if start == nil {
 		t.Fatal("expected Start payload")
 	}
-	if start.SandboxId != "sb-9" || !start.Tty || start.Cols != 100 || start.Rows != 30 {
+	if start.Sandbox != "sb-9" || !start.Tty || start.Cols != 100 || start.Rows != 30 {
 		t.Errorf("start = %+v", start)
+	}
+	if start.WorkspaceScope == nil || start.WorkspaceScope.GetWorkspace() != "default" {
+		t.Errorf("workspace scope: %+v", start.WorkspaceScope)
 	}
 	if len(start.Stdin) != 0 {
 		t.Errorf("start stdin should be empty, got %q", start.Stdin)
 	}
-	if start.Workdir != "/w" || start.TimeoutSeconds != 5 || start.Environment["A"] != "B" {
+	if start.Workdir != "/w" || start.Environment["A"] != "B" {
 		t.Errorf("start fields = %+v", start)
+	}
+	if start.ExecutionTimeout == nil || start.ExecutionTimeout.Seconds != 5 {
+		t.Errorf("execution timeout: %+v", start.ExecutionTimeout)
+	}
+}
+
+func TestBuildExecStartInput_ZeroTimeout(t *testing.T) {
+	r := &ExecRequest{Command: []string{"bash"}, Timeout: 0, Cols: 80, Rows: 24}
+	in := buildExecStartInput("default", "sb-1", r)
+	start := in.GetStart()
+	if start == nil {
+		t.Fatal("expected Start payload")
+	}
+	if start.ExecutionTimeout != nil {
+		t.Errorf("zero timeout should produce nil ExecutionTimeout, got %v", start.ExecutionTimeout)
 	}
 }
 
@@ -104,7 +122,7 @@ func TestExecInteractive_SendsStartAndReturnsExit(t *testing.T) {
 		Stdin:  bytes.NewReader(nil), // immediate EOF
 		Stdout: &out,
 		Stderr: io.Discard,
-	}, "sb-1", &ExecRequest{Command: []string{"bash"}, Cols: 80, Rows: 24})
+	}, &ExecRequest{Workspace: "default", Name: "sb-1", Command: []string{"bash"}, Cols: 80, Rows: 24})
 	if err != nil {
 		t.Fatalf("interactive: %v", err)
 	}
@@ -114,10 +132,20 @@ func TestExecInteractive_SendsStartAndReturnsExit(t *testing.T) {
 	if out.String() != "hi" {
 		t.Errorf("stdout = %q", out.String())
 	}
-	// The first sent message must be the Start payload.
+	// The first sent message must be the Start payload with correct scope.
 	bidi.mu.Lock()
 	defer bidi.mu.Unlock()
-	if len(bidi.sent) == 0 || bidi.sent[0].GetStart() == nil {
-		t.Errorf("first sent should be Start, got %+v", bidi.sent)
+	if len(bidi.sent) == 0 {
+		t.Fatal("expected at least one sent message")
+	}
+	start := bidi.sent[0].GetStart()
+	if start == nil {
+		t.Fatalf("first sent should be Start, got %+v", bidi.sent[0])
+	}
+	if start.WorkspaceScope == nil || start.WorkspaceScope.GetWorkspace() != "default" {
+		t.Errorf("Start WorkspaceScope = %+v, want workspace=default", start.WorkspaceScope)
+	}
+	if start.Sandbox != "sb-1" {
+		t.Errorf("Start Sandbox = %q, want sb-1", start.Sandbox)
 	}
 }

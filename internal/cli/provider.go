@@ -56,7 +56,6 @@ func newProviderListCommand() *cobra.Command {
 	var (
 		format        string
 		limit         int
-		offset        int
 		names         bool
 		allWorkspaces bool
 	)
@@ -66,7 +65,7 @@ func newProviderListCommand() *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return withGateway(cmd, func(gw gateway.Gateway) error {
-				opts := types.ListOptions{Limit: limit, Offset: offset, AllWorkspaces: allWorkspaces}
+				opts := types.ListOptions{PageSize: limit, AllWorkspaces: allWorkspaces}
 				providers, err := gw.ListProviders(cmd.Context(), workspace(), opts)
 				if err != nil {
 					return err
@@ -80,8 +79,7 @@ func newProviderListCommand() *cobra.Command {
 	}
 	f := c.Flags()
 	f.StringVarP(&format, "output", "o", "table", "output format: table|json|yaml")
-	f.IntVar(&limit, "limit", 100, "maximum number of providers to return")
-	f.IntVar(&offset, "offset", 0, "offset into the provider list")
+	f.IntVar(&limit, "limit", 100, "page size for provider listing")
 	f.BoolVar(&names, "names", false, "print only provider names, one per line")
 	f.BoolVar(&allWorkspaces, "all-workspaces", false, "list providers across all workspaces")
 	return c

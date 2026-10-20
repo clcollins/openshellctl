@@ -42,6 +42,9 @@ type CreateResult struct {
 // transfer path (no upload/forward/attach); the CLI decides output/attach on the
 // returned sandbox. Steps mirror run.rs (§5.5).
 func Create(ctx context.Context, d CreateDeps, r *CreateRequest, ttyResolved bool) (*CreateResult, error) {
+	if r.Workspace == "" {
+		return nil, ErrEmptyWorkspace
+	}
 	// (0) --replace: delete and wait for any existing same-named sandbox
 	// first, so the create below never races a deletion still in flight.
 	if r.Replace {
@@ -78,7 +81,7 @@ func Create(ctx context.Context, d CreateDeps, r *CreateRequest, ttyResolved boo
 			sink = nopSink{}
 		}
 		sink.Header(sb.Name)
-		if _, werr := WatchUntilReady(ctx, d.GW, sb.ID, phaseFromStatus(sb), d.IdleTimeout, r.GPU != nil, sink, d.Clock); werr != nil {
+		if _, werr := WatchUntilReady(ctx, d.GW, r.Workspace, sb.Name, phaseFromStatus(sb), d.IdleTimeout, r.GPU != nil, sink, d.Clock); werr != nil {
 			return nil, werr
 		}
 		if fresh, gerr := d.GW.GetSandbox(ctx, r.Workspace, sb.Name); gerr == nil {
@@ -119,10 +122,10 @@ func createSandboxRaw(ctx context.Context, gw gateway.Gateway, r *CreateRequest,
 	}
 
 	req := &pb.CreateSandboxRequest{
-		Spec:      rawSpec,
-		Name:      r.Name,
-		Labels:    r.Labels,
-		Workspace: r.Workspace,
+		Spec:           rawSpec,
+		Name:           r.Name,
+		Labels:         r.Labels,
+		WorkspaceScope: workspaceScope(r.Workspace),
 	}
 	sb, err := gw.CreateSandboxRaw(ctx, req)
 	if err != nil {
@@ -180,6 +183,8 @@ func phaseFromStatus(sb *types.Sandbox) pb.SandboxPhase {
 		return pb.SandboxPhase_SANDBOX_PHASE_ERROR
 	case types.SandboxStopped:
 		return pb.SandboxPhase_SANDBOX_PHASE_STOPPED
+	case types.SandboxCompleted:
+		return pb.SandboxPhase_SANDBOX_PHASE_COMPLETED
 	default:
 		return pb.SandboxPhase_SANDBOX_PHASE_UNSPECIFIED
 	}
@@ -202,6 +207,8 @@ func phaseName(p pb.SandboxPhase) types.SandboxPhase {
 		return types.SandboxStopped
 	case pb.SandboxPhase_SANDBOX_PHASE_STARTING:
 		return types.SandboxStarting
+	case pb.SandboxPhase_SANDBOX_PHASE_COMPLETED:
+		return types.SandboxCompleted
 	default:
 		return types.SandboxUnknown
 	}
@@ -252,23 +259,10 @@ func resolveRequestProviders(ctx context.Context, gw gateway.Gateway, r *CreateR
 	return nil
 }
 
-// ListAllProviders pages ListProviders by 100 until a short page. Exported
-// for reuse by `doctor`'s provider check (internal/cli/doctor.go), which
-// needs the exact same gateway's-full-provider-list this package's own
-// create flow already builds — not a separate implementation.
+// ListAllProviders fetches all providers in a workspace. The gateway's
+// ListProviders already calls the SDK's ListAll, which handles pagination
+// internally. Exported for reuse by `doctor`'s provider check
+// (internal/cli/doctor.go).
 func ListAllProviders(ctx context.Context, gw gateway.Gateway, workspace string) ([]*types.Provider, error) {
-	var all []*types.Provider
-	offset := 0
-	for {
-		page, err := gw.ListProviders(ctx, workspace, types.ListOptions{Limit: 100, Offset: offset})
-		if err != nil {
-			return nil, err
-		}
-		all = append(all, page...)
-		if len(page) < 100 {
-			break
-		}
-		offset += len(page)
-	}
-	return all, nil
+	return gw.ListProviders(ctx, workspace, types.ListOptions{})
 }

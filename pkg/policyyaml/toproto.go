@@ -39,7 +39,11 @@ func ToSDK(pf *PolicyFile) (*types.SandboxPolicy, error) {
 		out.NetworkPolicies = make(map[string]types.NetworkPolicyRule, len(pf.NetworkPolicies))
 		for _, key := range sortedKeys(pf.NetworkPolicies) {
 			rule := pf.NetworkPolicies[key]
-			out.NetworkPolicies[key] = networkPolicyToSDK(key, rule)
+			r, err := networkPolicyToSDK(key, rule)
+			if err != nil {
+				return nil, err
+			}
+			out.NetworkPolicies[key] = r
 		}
 	}
 
@@ -54,32 +58,48 @@ func ToSDK(pf *PolicyFile) (*types.SandboxPolicy, error) {
 	return out, nil
 }
 
-func networkPolicyToSDK(key string, rule NetworkPolicyRuleDef) types.NetworkPolicyRule {
+func networkPolicyToSDK(key string, rule NetworkPolicyRuleDef) (types.NetworkPolicyRule, error) {
 	name := rule.Name
 	if name == "" {
 		name = key
 	}
 	r := types.NetworkPolicyRule{Name: name}
 	for _, e := range rule.Endpoints {
-		r.Endpoints = append(r.Endpoints, endpointToSDK(e))
+		ep, err := endpointToSDK(e)
+		if err != nil {
+			return types.NetworkPolicyRule{}, fmt.Errorf("rule %s: %w", name, err)
+		}
+		r.Endpoints = append(r.Endpoints, ep)
 	}
 	for _, b := range rule.Binaries {
-		r.Binaries = append(r.Binaries, types.PolicyNetworkBinary{Path: b.Path}) // harness dropped
+		r.Binaries = append(r.Binaries, types.PolicyNetworkBinary{Path: b.Path})
 	}
-	return r
+	return r, nil
 }
 
-func endpointToSDK(e NetworkEndpointDef) types.PolicyNetworkEndpoint {
+func endpointToSDK(e NetworkEndpointDef) (types.PolicyNetworkEndpoint, error) {
 	port, ports := normalizePorts(e.Port, e.Ports)
+	tls, err := tlsModeToSDK(e.TLS)
+	if err != nil {
+		return types.PolicyNetworkEndpoint{}, fmt.Errorf("endpoint %s:%d: %w", e.Host, e.Port, err)
+	}
+	enforcement, err := enforcementToSDK(e.Enforcement)
+	if err != nil {
+		return types.PolicyNetworkEndpoint{}, fmt.Errorf("endpoint %s:%d: %w", e.Host, e.Port, err)
+	}
+	access, err := accessPresetToSDK(e.Access)
+	if err != nil {
+		return types.PolicyNetworkEndpoint{}, fmt.Errorf("endpoint %s:%d: %w", e.Host, e.Port, err)
+	}
 	out := types.PolicyNetworkEndpoint{
 		Host:                         e.Host,
 		Path:                         e.Path,
 		Port:                         port,
 		Ports:                        ports,
 		Protocol:                     e.Protocol,
-		TLS:                          e.TLS,
-		Enforcement:                  e.Enforcement,
-		Access:                       e.Access,
+		TLS:                          tls,
+		Enforcement:                  enforcement,
+		Access:                       access,
 		AllowedIPs:                   e.AllowedIPs,
 		AllowEncodedSlash:            e.AllowEncodedSlash,
 		WebsocketCredentialRewrite:   e.WebsocketCredentialRewrite,
@@ -116,7 +136,7 @@ func endpointToSDK(e NetworkEndpointDef) types.PolicyNetworkEndpoint {
 	if opts := mcpOptions(e.MCP); opts != nil {
 		out.Mcp = opts
 	}
-	return out
+	return out, nil
 }
 
 // normalizePorts: ports (non-empty) wins → (ports[0], ports); else port>0 →
@@ -275,4 +295,84 @@ func sortedKeys[V any](m map[string]V) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func tlsModeToSDK(s string) (types.NetworkTLSMode, error) {
+	switch s {
+	case "":
+		return types.NetworkTLSModeUnspecified, nil
+	case "skip":
+		return types.NetworkTLSModeSkip, nil
+	case "terminate":
+		return types.NetworkTLSModeTerminate, nil
+	case "passthrough":
+		return types.NetworkTLSModePassthrough, nil
+	default:
+		return 0, fmt.Errorf("unknown TLS mode %q (expected skip, terminate, or passthrough)", s)
+	}
+}
+
+func tlsModeFromSDK(m types.NetworkTLSMode) string {
+	switch m {
+	case types.NetworkTLSModeSkip:
+		return "skip"
+	case types.NetworkTLSModeTerminate:
+		return "terminate"
+	case types.NetworkTLSModePassthrough:
+		return "passthrough"
+	default:
+		return ""
+	}
+}
+
+func enforcementToSDK(s string) (types.NetworkEnforcementMode, error) {
+	switch s {
+	case "":
+		return types.NetworkEnforcementModeUnspecified, nil
+	case "enforce":
+		return types.NetworkEnforcementModeEnforce, nil
+	case "audit":
+		return types.NetworkEnforcementModeAudit, nil
+	default:
+		return 0, fmt.Errorf("unknown enforcement mode %q (expected enforce or audit)", s)
+	}
+}
+
+func enforcementFromSDK(m types.NetworkEnforcementMode) string {
+	switch m {
+	case types.NetworkEnforcementModeEnforce:
+		return "enforce"
+	case types.NetworkEnforcementModeAudit:
+		return "audit"
+	default:
+		return ""
+	}
+}
+
+func accessPresetToSDK(s string) (types.NetworkAccessPreset, error) {
+	switch s {
+	case "":
+		return types.NetworkAccessPresetUnspecified, nil
+	case "read-only":
+		return types.NetworkAccessPresetReadOnly, nil
+	case "read-write":
+		return types.NetworkAccessPresetReadWrite, nil
+	case "full":
+		return types.NetworkAccessPresetFull, nil
+	default:
+		return 0, fmt.Errorf("unknown access preset %q (expected read-only, read-write, or full)", s)
+	}
+}
+
+func accessPresetFromSDK(m types.NetworkAccessPreset) string {
+	switch m {
+	case types.NetworkAccessPresetReadOnly:
+		return "read-only"
+	case types.NetworkAccessPresetReadWrite:
+		return "read-write"
+	case types.NetworkAccessPresetFull:
+		return "full"
+	default:
+		return ""
+	}
 }

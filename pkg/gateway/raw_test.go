@@ -79,22 +79,37 @@ func newTestClient(t *testing.T, srv *fakeServer) (*client, func()) {
 	return c, cleanup
 }
 
-func TestRawDeleteSandbox_PreservesBool(t *testing.T) {
-	for _, want := range []bool{true, false} {
-		srv := &fakeServer{deleteResp: &pb.DeleteSandboxResponse{Deleted: want}}
-		c, cleanup := newTestClient(t, srv)
+func TestRawDeleteSandbox_MapsOutcome(t *testing.T) {
+	tests := []struct {
+		name    string
+		outcome pb.DeletionOutcome
+		want    bool
+	}{
+		{"completed", pb.DeletionOutcome_DELETION_OUTCOME_COMPLETED, true},
+		{"already_absent", pb.DeletionOutcome_DELETION_OUTCOME_ALREADY_ABSENT, true},
+		{"accepted", pb.DeletionOutcome_DELETION_OUTCOME_ACCEPTED, true},
+		{"unspecified", pb.DeletionOutcome_DELETION_OUTCOME_UNSPECIFIED, false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			srv := &fakeServer{deleteResp: &pb.DeleteSandboxResponse{Outcome: tt.outcome}}
+			c, cleanup := newTestClient(t, srv)
+			defer cleanup()
 
-		got, err := c.DeleteSandbox(context.Background(), "default", "sb-1")
-		cleanup()
-		if err != nil {
-			t.Fatalf("DeleteSandbox: %v", err)
-		}
-		if got != want {
-			t.Errorf("deleted = %v, want %v", got, want)
-		}
-		if srv.deleteReq.GetName() != "sb-1" || srv.deleteReq.GetWorkspace() != "default" {
-			t.Errorf("request = %+v", srv.deleteReq)
-		}
+			got, err := c.DeleteSandbox(context.Background(), "default", "sb-1")
+			if err != nil {
+				t.Fatalf("DeleteSandbox: %v", err)
+			}
+			if got != tt.want {
+				t.Errorf("deleted = %v, want %v", got, tt.want)
+			}
+			if srv.deleteReq.GetName() != "sb-1" {
+				t.Errorf("request name = %q, want %q", srv.deleteReq.GetName(), "sb-1")
+			}
+			if srv.deleteReq.GetWorkspaceScope().GetWorkspace() != "default" {
+				t.Errorf("request workspace = %q, want %q", srv.deleteReq.GetWorkspaceScope().GetWorkspace(), "default")
+			}
+		})
 	}
 }
 
@@ -118,7 +133,7 @@ func TestRawWatchSandbox_StreamsEvents(t *testing.T) {
 	c, cleanup := newTestClient(t, srv)
 	defer cleanup()
 
-	stream, err := c.WatchSandbox(context.Background(), &pb.WatchSandboxRequest{Id: "sb-1", FollowStatus: true})
+	stream, err := c.WatchSandbox(context.Background(), &pb.WatchSandboxRequest{Sandbox: "sb-1", FollowStatus: true})
 	if err != nil {
 		t.Fatalf("WatchSandbox: %v", err)
 	}
@@ -151,7 +166,7 @@ func TestRawExecSandbox_StreamsExit(t *testing.T) {
 	c, cleanup := newTestClient(t, srv)
 	defer cleanup()
 
-	stream, err := c.ExecSandbox(context.Background(), &pb.ExecSandboxRequest{SandboxId: "sb-1", Command: []string{"true"}})
+	stream, err := c.ExecSandbox(context.Background(), &pb.ExecSandboxRequest{Sandbox: "sb-1", Command: []string{"true"}})
 	if err != nil {
 		t.Fatalf("ExecSandbox: %v", err)
 	}

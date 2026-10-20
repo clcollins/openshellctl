@@ -21,7 +21,7 @@ var (
 
 // defaultOpenShellPin is the compiled-in fallback pin, kept in sync with
 // hack/openshell-pin (enforced by make verify-pin).
-const defaultOpenShellPin = "v0.0.116"
+const defaultOpenShellPin = "v0.1.3"
 
 // Set applies linker-injected build metadata. Empty values are ignored so an
 // unset -ldflags target does not overwrite a sensible default.

@@ -191,7 +191,7 @@ func lintEndpoint(policyName string, e types.PolicyNetworkEndpoint, add func(str
 		add(fmt.Sprintf("network policy '%s': endpoint '%s' must declare at least one port", policyName, e.Host))
 	}
 	// tcp + L7 access preset
-	if e.Protocol == "tcp" && e.Access != "" {
+	if e.Protocol == "tcp" && e.Access != types.NetworkAccessPresetUnspecified {
 		add(fmt.Sprintf("network policy '%s': endpoint %d has invalid L7 configuration: protocol tcp does not support access, rules, or deny_rules; remove those L7 fields", policyName, 0))
 	}
 }

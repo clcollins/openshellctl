@@ -31,13 +31,13 @@ func errorSandboxEvent(reason, message string) *pb.SandboxStreamEvent {
 func TestWatchUntilReady_Success(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING),
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_READY),
 	}}, nil)
 
 	now := time.Unix(1000, 0)
-	out, err := WatchUntilReady(context.Background(), gw, "id", pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, time.Minute, false, nil, func() time.Time { return now })
+	out, err := WatchUntilReady(context.Background(), gw, "default", "sb-1", pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, time.Minute, false, nil, func() time.Time { return now })
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -51,12 +51,12 @@ func TestWatchUntilReady_StaleReadyGuard(t *testing.T) {
 	// Ready is not accepted; the stream then ends → ErrStreamEnded.
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_READY),
 	}}, nil)
 
 	now := time.Unix(1000, 0)
-	_, err := WatchUntilReady(context.Background(), gw, "id", pb.SandboxPhase_SANDBOX_PHASE_READY, time.Minute, false, nil, func() time.Time { return now })
+	_, err := WatchUntilReady(context.Background(), gw, "default", "sb-1", pb.SandboxPhase_SANDBOX_PHASE_READY, time.Minute, false, nil, func() time.Time { return now })
 	if !errors.Is(err, ErrStreamEnded) {
 		t.Fatalf("err = %v, want ErrStreamEnded (stale-Ready guard)", err)
 	}
@@ -65,13 +65,13 @@ func TestWatchUntilReady_StaleReadyGuard(t *testing.T) {
 func TestWatchUntilReady_ErrorCondition(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING),
 		errorSandboxEvent("ImagePullBackOff", "cannot pull image"),
 	}}, nil)
 
 	now := time.Unix(1000, 0)
-	_, err := WatchUntilReady(context.Background(), gw, "id", pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, time.Minute, false, nil, func() time.Time { return now })
+	_, err := WatchUntilReady(context.Background(), gw, "default", "sb-1", pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, time.Minute, false, nil, func() time.Time { return now })
 	var pf *ErrProvisionFailed
 	if !errors.As(err, &pf) {
 		t.Fatalf("err = %v, want ErrProvisionFailed", err)
@@ -86,7 +86,7 @@ func TestWatchUntilReady_Timeout(t *testing.T) {
 	gw := mock.NewMockGateway(ctrl)
 	// Two non-progress snapshots; the clock advances past the idle deadline
 	// between events so the timeout fires.
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING),
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING),
 	}}, nil)
@@ -104,7 +104,7 @@ func TestWatchUntilReady_Timeout(t *testing.T) {
 		}
 		return t
 	}
-	_, err := WatchUntilReady(context.Background(), gw, "id", pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, 10*time.Second, true, nil, clock)
+	_, err := WatchUntilReady(context.Background(), gw, "default", "sb-1", pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, 10*time.Second, true, nil, clock)
 	var to *ErrProvisionTimeout
 	if !errors.As(err, &to) {
 		t.Fatalf("err = %v, want ErrProvisionTimeout", err)
@@ -117,7 +117,7 @@ func TestWatchUntilReady_Timeout(t *testing.T) {
 func TestWatchUntilReady_ProgressResetsIdle(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING),
 		eventProgress(), // resets the idle deadline
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_READY),
@@ -145,12 +145,30 @@ func TestWatchUntilReady_ProgressResetsIdle(t *testing.T) {
 		}
 		return tt
 	}
-	out, err := WatchUntilReady(context.Background(), gw, "id", pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, 20*time.Second, false, nil, clock)
+	out, err := WatchUntilReady(context.Background(), gw, "default", "sb-1", pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, 20*time.Second, false, nil, clock)
 	if err != nil {
 		t.Fatalf("progress should reset idle deadline; err = %v", err)
 	}
 	if out.Phase != pb.SandboxPhase_SANDBOX_PHASE_READY {
 		t.Errorf("phase = %v", out.Phase)
+	}
+}
+
+func TestWatchUntilReady_CompletedIsTerminalSuccess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING),
+		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_COMPLETED),
+	}}, nil)
+
+	now := time.Unix(1000, 0)
+	out, err := WatchUntilReady(context.Background(), gw, "default", "sb-1", pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, time.Minute, false, nil, func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("COMPLETED should be terminal success, got err = %v", err)
+	}
+	if out.Phase != pb.SandboxPhase_SANDBOX_PHASE_COMPLETED {
+		t.Errorf("phase = %v, want COMPLETED", out.Phase)
 	}
 }
 

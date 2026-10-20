@@ -38,6 +38,9 @@ func (e *ErrLifecycleStreamEnded) Error() string {
 
 // Stop stops a sandbox and watches FollowStatus until STOPPED (run.rs:2417-2543).
 func Stop(ctx context.Context, gw gateway.Gateway, workspace, name string, timeout time.Duration) (*pb.Sandbox, error) {
+	if workspace == "" {
+		return nil, ErrEmptyWorkspace
+	}
 	sb, err := gw.StopSandbox(ctx, workspace, name)
 	if err != nil {
 		return nil, err
@@ -45,11 +48,14 @@ func Stop(ctx context.Context, gw gateway.Gateway, workspace, name string, timeo
 	if sb == nil {
 		return nil, errors.New("gateway returned no sandbox after stop")
 	}
-	return watchUntilPhase(ctx, gw, sb.ID, pb.SandboxPhase_SANDBOX_PHASE_STOPPED, "Stopped", timeout)
+	return watchUntilPhase(ctx, gw, workspace, name, pb.SandboxPhase_SANDBOX_PHASE_STOPPED, "Stopped", timeout)
 }
 
 // Start starts a sandbox and watches until READY.
 func Start(ctx context.Context, gw gateway.Gateway, workspace, name string, timeout time.Duration) (*pb.Sandbox, error) {
+	if workspace == "" {
+		return nil, ErrEmptyWorkspace
+	}
 	sb, err := gw.StartSandbox(ctx, workspace, name)
 	if err != nil {
 		return nil, err
@@ -57,18 +63,22 @@ func Start(ctx context.Context, gw gateway.Gateway, workspace, name string, time
 	if sb == nil {
 		return nil, errors.New("gateway returned no sandbox after start")
 	}
-	return watchUntilPhase(ctx, gw, sb.ID, pb.SandboxPhase_SANDBOX_PHASE_READY, "Ready", timeout)
+	return watchUntilPhase(ctx, gw, workspace, name, pb.SandboxPhase_SANDBOX_PHASE_READY, "Ready", timeout)
 }
 
 // watchUntilPhase follows status until the target phase, Error, timeout, or EOF.
-func watchUntilPhase(ctx context.Context, gw gateway.Gateway, id string, target pb.SandboxPhase, targetName string, timeout time.Duration) (*pb.Sandbox, error) {
+func watchUntilPhase(ctx context.Context, gw gateway.Gateway, workspace, sandboxName string, target pb.SandboxPhase, targetName string, timeout time.Duration) (*pb.Sandbox, error) {
 	if timeout == 0 {
 		timeout = 300 * time.Second
 	}
 	watchCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	stream, err := gw.WatchSandbox(watchCtx, &pb.WatchSandboxRequest{Id: id, FollowStatus: true})
+	stream, err := gw.WatchSandbox(watchCtx, &pb.WatchSandboxRequest{
+		WorkspaceScope: workspaceScope(workspace),
+		Sandbox:        sandboxName,
+		FollowStatus:   true,
+	})
 	if err != nil {
 		return nil, err
 	}
@@ -91,6 +101,8 @@ func watchUntilPhase(ctx context.Context, gw gateway.Gateway, id string, target 
 		}
 		switch sb.GetStatus().GetPhase() {
 		case target:
+			return sb, nil
+		case pb.SandboxPhase_SANDBOX_PHASE_COMPLETED:
 			return sb, nil
 		case pb.SandboxPhase_SANDBOX_PHASE_ERROR:
 			return nil, &ErrLifecycle{Target: targetName}

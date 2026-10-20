@@ -1,5 +1,5 @@
 {
-  "note": "openshellctl-only flags not present in the upstream openshell CLI at the pinned version. See hack/parity/sandbox_flags_v0.0.116.json for upstream flags. parity_test.go confirms every flag on an implemented subcommand (see implementedSubcommands in parity_test.go) appears in exactly one of the two files.",
+  "note": "openshellctl-only flags not present in the upstream openshell CLI at the pinned version. See hack/parity/sandbox_flags_v0.1.3.json for upstream flags. parity_test.go confirms every flag on an implemented subcommand (see implementedSubcommands in parity_test.go) appears in exactly one of the two files.",
   "subcommands": {
     "create": [
       {"long": "file", "short": "f", "type": "string", "note": "manifest input (- for stdin, or an http(s):// URL as of ROSAENG-74491 — openshellctl-only, no upstream Rust CLI equivalent); docs/plans/0002-openshell-go-client-plan.md:585"},
@@ -9,6 +9,12 @@
       {"long": "param-file", "type": "stringArray", "repeatable": true, "note": "ROSAENG-74244; oc process --param-file convention"},
       {"long": "parameters", "type": "bool", "note": "ROSAENG-74244; oc process --parameters convention"},
       {"long": "ignore-unknown-parameters", "type": "bool", "note": "ROSAENG-74244; oc process --ignore-unknown-parameters convention"}
+    ],
+    "list": [
+      {"long": "limit", "type": "int", "default": "100", "note": "openshellctl page-size hint; upstream uses --page-size/--page-token for single-page pagination, openshellctl's ListAll follows all pages so --limit controls the per-page batch size"}
+    ],
+    "provider list": [
+      {"long": "limit", "type": "int", "default": "100", "note": "openshellctl page-size hint; upstream uses --page-size/--page-token, openshellctl's ListAll follows all pages so --limit controls the per-page batch size"}
     ]
   }
 }

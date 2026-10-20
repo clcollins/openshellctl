@@ -50,9 +50,12 @@ func (e *ErrDeleteTimeout) Error() string {
 // aborts. Wait (extension) polls GetSandbox every 500ms until NotFound or
 // timeout. cfgw may be nil (no last_sandbox clearing).
 func Delete(ctx context.Context, gw gateway.Gateway, cfgw gatewayconfig.Writer, gatewayName string, r DeleteRequest, report func(DeleteOutcome)) error {
+	if r.Workspace == "" {
+		return ErrEmptyWorkspace
+	}
 	names := r.Names
 	if r.All {
-		list, err := gw.ListSandboxes(ctx, r.Workspace, types.ListOptions{Limit: 1000})
+		list, err := gw.ListSandboxes(ctx, r.Workspace, types.ListOptions{})
 		if err != nil {
 			return err
 		}

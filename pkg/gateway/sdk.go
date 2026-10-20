@@ -6,6 +6,7 @@ import (
 
 	v1 "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1"
 	types "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
+	dm "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 
 	"github.com/openshift-online/openshellctl/pkg/auth"
@@ -56,7 +57,7 @@ func (c *client) CreateSandbox(ctx context.Context, workspace, name string, spec
 func (c *client) ListSandboxes(ctx context.Context, workspace string, opts types.ListOptions) ([]*types.Sandbox, error) {
 	var out []*types.Sandbox
 	err := withAuthRetry(ctx, c.auth, func(ctx context.Context) error {
-		s, err := c.sdk().Sandboxes().List(ctx, workspace, opts)
+		s, err := c.sdk().Sandboxes().ListAll(ctx, workspace, opts)
 		if err != nil {
 			return Classify(err, "sandbox", "")
 		}
@@ -66,16 +67,20 @@ func (c *client) ListSandboxes(ctx context.Context, workspace string, opts types
 	return out, err
 }
 
-// DeleteSandbox uses the raw stub so the DeleteSandboxResponse.Deleted bool is
-// preserved (the SDK's Delete discards it). See raw.go.
+// DeleteSandbox uses the raw stub so the DeleteSandboxResponse outcome is
+// preserved (the SDK's Delete discards it). The DeletionOutcome enum is mapped
+// to a bool: Completed and AlreadyAbsent → true; everything else → false.
 func (c *client) DeleteSandbox(ctx context.Context, workspace, name string) (bool, error) {
 	var deleted bool
 	err := withAuthRetry(ctx, c.auth, func(ctx context.Context) error {
-		resp, err := c.conn.Raw.DeleteSandbox(ctx, &pb.DeleteSandboxRequest{Name: name, Workspace: workspace})
+		resp, err := c.conn.Raw.DeleteSandbox(ctx, &pb.DeleteSandboxRequest{
+			Name:           name,
+			WorkspaceScope: workspaceScope(workspace),
+		})
 		if err != nil {
 			return Classify(err, "sandbox", name)
 		}
-		deleted = resp.GetDeleted()
+		deleted = deletionCompleted(resp.GetOutcome())
 		return nil
 	})
 	return deleted, err
@@ -110,7 +115,7 @@ func (c *client) StartSandbox(ctx context.Context, workspace, name string) (*typ
 func (c *client) ListSandboxProviders(ctx context.Context, workspace, sandbox string) ([]*types.Provider, error) {
 	var out []*types.Provider
 	err := withAuthRetry(ctx, c.auth, func(ctx context.Context) error {
-		p, err := c.sdk().Sandboxes().ListProviders(ctx, workspace, sandbox)
+		p, err := c.sdk().Sandboxes().ListAllProviders(ctx, workspace, sandbox)
 		if err != nil {
 			return Classify(err, "sandbox", sandbox)
 		}
@@ -155,7 +160,7 @@ func (c *client) DetachProvider(ctx context.Context, workspace, sandbox, provide
 func (c *client) ListProviders(ctx context.Context, workspace string, opts types.ListOptions) ([]*types.Provider, error) {
 	var out []*types.Provider
 	err := withAuthRetry(ctx, c.auth, func(ctx context.Context) error {
-		p, err := c.sdk().Providers().List(ctx, workspace, opts)
+		p, err := c.sdk().Providers().ListAll(ctx, workspace, opts)
 		if err != nil {
 			return Classify(err, "provider", "")
 		}
@@ -214,7 +219,7 @@ func (c *client) UpdateProvider(ctx context.Context, workspace string, provider 
 
 func (c *client) DeleteProvider(ctx context.Context, workspace, name string) error {
 	return withAuthRetry(ctx, c.auth, func(ctx context.Context) error {
-		if err := c.sdk().Providers().Delete(ctx, workspace, name); err != nil {
+		if _, err := c.sdk().Providers().Delete(ctx, workspace, name); err != nil {
 			return Classify(err, "provider", name)
 		}
 		return nil
@@ -306,4 +311,29 @@ func (c *client) TCPListen(ctx context.Context, workspace, sandbox string, remot
 		return nil, Classify(err, "sandbox", sandbox)
 	}
 	return l, nil
+}
+
+// workspaceScope builds the WorkspaceSelector oneof for raw proto requests.
+// Callers must validate workspace before calling; this is a thin builder.
+func workspaceScope(workspace string) *dm.WorkspaceSelector {
+	if workspace == "" {
+		panic("workspaceScope called with empty workspace — caller must validate")
+	}
+	return &dm.WorkspaceSelector{
+		Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace},
+	}
+}
+
+// deletionCompleted maps a proto DeletionOutcome to a bool. Completed,
+// Accepted (async), and AlreadyAbsent all mean the server acknowledged the
+// delete — the sandbox is gone or will be gone shortly.
+func deletionCompleted(o pb.DeletionOutcome) bool {
+	switch o {
+	case pb.DeletionOutcome_DELETION_OUTCOME_COMPLETED,
+		pb.DeletionOutcome_DELETION_OUTCOME_ACCEPTED,
+		pb.DeletionOutcome_DELETION_OUTCOME_ALREADY_ABSENT:
+		return true
+	default:
+		return false
+	}
 }

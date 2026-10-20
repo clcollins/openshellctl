@@ -134,8 +134,8 @@ network_policies:
 		t.Error("process not converted")
 	}
 	e := p.NetworkPolicies["p"].Endpoints[0]
-	if e.TLS != "terminate" || e.Enforcement != "enforce" || !e.AllowEncodedSlash {
-		t.Errorf("endpoint scalars wrong: %+v", e)
+	if e.TLS != types.NetworkTLSModeTerminate || e.Enforcement != types.NetworkEnforcementModeEnforce || !e.AllowEncodedSlash {
+		t.Errorf("endpoint scalars wrong: TLS=%v Enforcement=%v", e.TLS, e.Enforcement)
 	}
 	if e.CredentialBinding == nil || e.CredentialBinding.Provider != "my-provider" {
 		t.Error("credential_binding not converted")
@@ -145,6 +145,118 @@ network_policies:
 	}
 	if len(e.AllowedIPs) != 1 || e.AllowedIPs[0] != "10.0.0.1" {
 		t.Errorf("allowed_ips wrong: %v", e.AllowedIPs)
+	}
+}
+
+func TestTLSModeConversion(t *testing.T) {
+	cases := []struct {
+		str     string
+		want    types.NetworkTLSMode
+		wantErr bool
+	}{
+		{"", types.NetworkTLSModeUnspecified, false},
+		{"skip", types.NetworkTLSModeSkip, false},
+		{"terminate", types.NetworkTLSModeTerminate, false},
+		{"passthrough", types.NetworkTLSModePassthrough, false},
+		{"unknown", 0, true},
+	}
+	for _, tc := range cases {
+		got, err := tlsModeToSDK(tc.str)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("tlsModeToSDK(%q) should error", tc.str)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("tlsModeToSDK(%q) unexpected error: %v", tc.str, err)
+		}
+		if got != tc.want {
+			t.Errorf("tlsModeToSDK(%q) = %v, want %v", tc.str, got, tc.want)
+		}
+	}
+	for _, tc := range cases {
+		if tc.wantErr || tc.str == "" {
+			continue
+		}
+		if got := tlsModeFromSDK(tc.want); got != tc.str {
+			t.Errorf("tlsModeFromSDK(%v) = %q, want %q", tc.want, got, tc.str)
+		}
+	}
+}
+
+func TestEnforcementModeConversion(t *testing.T) {
+	cases := []struct {
+		str     string
+		want    types.NetworkEnforcementMode
+		wantErr bool
+	}{
+		{"", types.NetworkEnforcementModeUnspecified, false},
+		{"enforce", types.NetworkEnforcementModeEnforce, false},
+		{"audit", types.NetworkEnforcementModeAudit, false},
+		{"unknown", 0, true},
+	}
+	for _, tc := range cases {
+		got, err := enforcementToSDK(tc.str)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("enforcementToSDK(%q) should error", tc.str)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("enforcementToSDK(%q) unexpected error: %v", tc.str, err)
+		}
+		if got != tc.want {
+			t.Errorf("enforcementToSDK(%q) = %v, want %v", tc.str, got, tc.want)
+		}
+	}
+	for _, tc := range cases {
+		if tc.wantErr || tc.str == "" {
+			continue
+		}
+		if got := enforcementFromSDK(tc.want); got != tc.str {
+			t.Errorf("enforcementFromSDK(%v) = %q, want %q", tc.want, got, tc.str)
+		}
+	}
+}
+
+func TestAccessPresetConversion(t *testing.T) {
+	cases := []struct {
+		str     string
+		want    types.NetworkAccessPreset
+		wantErr bool
+	}{
+		{"", types.NetworkAccessPresetUnspecified, false},
+		{"read-only", types.NetworkAccessPresetReadOnly, false},
+		{"read-write", types.NetworkAccessPresetReadWrite, false},
+		{"full", types.NetworkAccessPresetFull, false},
+		{"unknown", 0, true},
+		{"read_only", 0, true},
+		{"read_write", 0, true},
+	}
+	for _, tc := range cases {
+		got, err := accessPresetToSDK(tc.str)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("accessPresetToSDK(%q) should error", tc.str)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("accessPresetToSDK(%q) unexpected error: %v", tc.str, err)
+		}
+		if got != tc.want {
+			t.Errorf("accessPresetToSDK(%q) = %v, want %v", tc.str, got, tc.want)
+		}
+	}
+	for _, tc := range cases {
+		if tc.wantErr || tc.str == "" {
+			continue
+		}
+		if got := accessPresetFromSDK(tc.want); got != tc.str {
+			t.Errorf("accessPresetFromSDK(%v) = %q, want %q", tc.want, got, tc.str)
+		}
 	}
 }
 

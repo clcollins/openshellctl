@@ -44,7 +44,7 @@ func (c *client) WatchSandbox(ctx context.Context, req *pb.WatchSandboxRequest) 
 	err := withAuthRetry(streamCtx, c.auth, func(ctx context.Context) error {
 		s, err := c.conn.Raw.WatchSandbox(ctx, req)
 		if err != nil {
-			return Classify(err, "sandbox", req.GetId())
+			return Classify(err, "sandbox", req.GetSandbox())
 		}
 		sc = s
 		return nil
@@ -64,7 +64,7 @@ func (c *client) ExecSandbox(ctx context.Context, req *pb.ExecSandboxRequest) (S
 	err := withAuthRetry(streamCtx, c.auth, func(ctx context.Context) error {
 		s, err := c.conn.Raw.ExecSandbox(ctx, req)
 		if err != nil {
-			return Classify(err, "sandbox", req.GetSandboxId())
+			return Classify(err, "sandbox", req.GetSandbox())
 		}
 		sc = s
 		return nil

@@ -1,5 +1,5 @@
-github.com/NVIDIA/OpenShell/sdk/go v0.0.0-20260828082717-d1155aa70042 h1:8/f+1wzwIYXXN2Jxr+mJV2jzDCcFegPkqUXHkiYbk7A=
-github.com/NVIDIA/OpenShell/sdk/go v0.0.0-20260828082717-d1155aa70042/go.mod h1:fWdNw+NcUcKcvMLTa0/q66wVUJHGwWWV+CZOh/BdMZw=
+github.com/NVIDIA/OpenShell/sdk/go v0.0.0-20261009050449-e1f3c82caa3e h1:M4VdrEpWfr4D4TxbCTJcScV1C4Oc2jJXLVST6wTEzBs=
+github.com/NVIDIA/OpenShell/sdk/go v0.0.0-20261009050449-e1f3c82caa3e/go.mod h1:+wnjuZwBJH2yz8cU1t7FiGK7xPQyxjOY3YZNFcfpL90=
 github.com/cenkalti/backoff/v4 v4.3.0 h1:MyRJ/UdXutAwSAT+s3wNd7MfTIcy71VQueUuFK343L8=
 github.com/cenkalti/backoff/v4 v4.3.0/go.mod h1:Y3VNntkOUPxTVeUxJ/G5vcM//AlwfmyYozVcomhLiZE=
 github.com/cespare/xxhash/v2 v2.3.0 h1:UL815xU9SqsFlibzuggzjXhog7bL6oX9BbNZnL2UFvs=

@@ -7,6 +7,7 @@ import (
 	"io"
 	"time"
 
+	dm "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 
 	"github.com/openshift-online/openshellctl/pkg/gateway"
@@ -75,6 +76,19 @@ func (e *ErrProvisionTimeout) Error() string {
 // ErrStreamEnded reports the watch stream ending before a terminal phase.
 var ErrStreamEnded = errors.New("sandbox provisioning stream ended before reaching terminal phase")
 
+// ErrEmptyWorkspace is returned when a workspace-scoped operation receives
+// an empty workspace string.
+var ErrEmptyWorkspace = errors.New("workspace must not be empty")
+
+// workspaceScope builds the WorkspaceSelector for raw proto requests that
+// require a workspace-scoped lookup (watch, exec, logs, create). Every
+// exported entry point validates workspace before calling this.
+func workspaceScope(workspace string) *dm.WorkspaceSelector {
+	return &dm.WorkspaceSelector{
+		Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace},
+	}
+}
+
 // progress metadata keys that reset the idle deadline (common.rs:510-534).
 const (
 	metaCompleteStep = "openshell.progress.complete_step"
@@ -86,7 +100,10 @@ const (
 // Error, timeout, or EOF (run.rs:558-1023, A.7). The idle deadline resets only
 // on provisioning-progress events. Ready is accepted only after a non-Ready
 // phase was seen (stale-Ready guard).
-func WatchUntilReady(ctx context.Context, gw gateway.Gateway, id string, initialPhase pb.SandboxPhase, idleTimeout time.Duration, gpuRequested bool, sink ProgressSink, clock Clock) (*WatchOutcome, error) {
+func WatchUntilReady(ctx context.Context, gw gateway.Gateway, workspace, sandboxName string, initialPhase pb.SandboxPhase, idleTimeout time.Duration, gpuRequested bool, sink ProgressSink, clock Clock) (*WatchOutcome, error) {
+	if workspace == "" {
+		return nil, ErrEmptyWorkspace
+	}
 	if sink == nil {
 		sink = nopSink{}
 	}
@@ -98,7 +115,8 @@ func WatchUntilReady(ctx context.Context, gw gateway.Gateway, id string, initial
 	}
 
 	req := &pb.WatchSandboxRequest{
-		Id:             id,
+		WorkspaceScope: workspaceScope(workspace),
+		Sandbox:        sandboxName,
 		FollowStatus:   true,
 		FollowLogs:     true,
 		FollowEvents:   true,
@@ -148,6 +166,8 @@ func WatchUntilReady(ctx context.Context, gw gateway.Gateway, id string, initial
 				reason := readyFalseCondition(sb)
 				sink.Error(reason)
 				return nil, &ErrProvisionFailed{Reason: reason}
+			case pb.SandboxPhase_SANDBOX_PHASE_COMPLETED:
+				return &WatchOutcome{Final: sb, Phase: phase}, nil
 			}
 		case ev.GetEvent() != nil:
 			e := ev.GetEvent()

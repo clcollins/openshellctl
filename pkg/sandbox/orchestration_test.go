@@ -3,6 +3,7 @@ package sandbox
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"testing"
 	"time"
@@ -35,6 +36,28 @@ func phaseEvent(p pb.SandboxPhase) *pb.SandboxStreamEvent {
 	return &pb.SandboxStreamEvent{Payload: &pb.SandboxStreamEvent_Sandbox{
 		Sandbox: &pb.Sandbox{Status: &pb.SandboxStatus{Phase: p}},
 	}}
+}
+
+// watchReqMatcher is a gomock.Matcher that asserts a *pb.WatchSandboxRequest
+// carries the expected WorkspaceScope and Sandbox name.
+type watchReqMatcher struct {
+	workspace string
+	sandbox   string
+}
+
+func (m watchReqMatcher) Matches(x interface{}) bool {
+	req, ok := x.(*pb.WatchSandboxRequest)
+	if !ok {
+		return false
+	}
+	if req.WorkspaceScope == nil || req.WorkspaceScope.GetWorkspace() != m.workspace {
+		return false
+	}
+	return req.Sandbox == m.sandbox
+}
+
+func (m watchReqMatcher) String() string {
+	return fmt.Sprintf("WatchSandboxRequest{workspace=%q, sandbox=%q}", m.workspace, m.sandbox)
 }
 
 func TestDelete_ByName(t *testing.T) {
@@ -116,7 +139,7 @@ func TestStop_WatchesUntilStopped(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
 	gw.EXPECT().StopSandbox(gomock.Any(), "default", "sb").Return(&types.Sandbox{ID: "id-1"}, nil)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_STOPPING),
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_STOPPED),
 	}}, nil)
@@ -134,7 +157,7 @@ func TestStart_WatchesUntilReady(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
 	gw.EXPECT().StartSandbox(gomock.Any(), "default", "sb").Return(&types.Sandbox{ID: "id-1"}, nil)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_STARTING),
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_READY),
 	}}, nil)
@@ -149,7 +172,7 @@ func TestLifecycle_ErrorPhase(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
 	gw.EXPECT().StopSandbox(gomock.Any(), "default", "sb").Return(&types.Sandbox{ID: "id-1"}, nil)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
 		phaseEvent(pb.SandboxPhase_SANDBOX_PHASE_ERROR),
 	}}, nil)
 
@@ -164,7 +187,7 @@ func TestLifecycle_StreamEnded(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
 	gw.EXPECT().StartSandbox(gomock.Any(), "default", "sb").Return(&types.Sandbox{ID: "id-1"}, nil)
-	gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).Return(&scriptedStream{}, nil)
+	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb"}).Return(&scriptedStream{}, nil)
 
 	_, err := Start(context.Background(), gw, "default", "sb", time.Minute)
 	var se *ErrLifecycleStreamEnded
