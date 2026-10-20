@@ -60,6 +60,9 @@ type ExecInteractiveDeps struct {
 // The caller has already resolved the sandbox name, put the terminal in raw mode,
 // and supplies the resize channel; this function is the thin stream shell.
 func ExecInteractive(ctx context.Context, d ExecInteractiveDeps, r *ExecRequest) (int, error) {
+	if r.Workspace == "" {
+		return 0, ErrEmptyWorkspace
+	}
 	bidi, err := d.GW.ExecSandboxInteractive(ctx)
 	if err != nil {
 		return 0, err

@@ -38,6 +38,9 @@ func (e *ErrLifecycleStreamEnded) Error() string {
 
 // Stop stops a sandbox and watches FollowStatus until STOPPED (run.rs:2417-2543).
 func Stop(ctx context.Context, gw gateway.Gateway, workspace, name string, timeout time.Duration) (*pb.Sandbox, error) {
+	if workspace == "" {
+		return nil, ErrEmptyWorkspace
+	}
 	sb, err := gw.StopSandbox(ctx, workspace, name)
 	if err != nil {
 		return nil, err
@@ -50,6 +53,9 @@ func Stop(ctx context.Context, gw gateway.Gateway, workspace, name string, timeo
 
 // Start starts a sandbox and watches until READY.
 func Start(ctx context.Context, gw gateway.Gateway, workspace, name string, timeout time.Duration) (*pb.Sandbox, error) {
+	if workspace == "" {
+		return nil, ErrEmptyWorkspace
+	}
 	sb, err := gw.StartSandbox(ctx, workspace, name)
 	if err != nil {
 		return nil, err

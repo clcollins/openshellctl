@@ -7,7 +7,6 @@ import (
 	"time"
 
 	types "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
-	dm "github.com/NVIDIA/OpenShell/sdk/go/proto/datamodelv1"
 	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 	"google.golang.org/protobuf/types/known/structpb"
 
@@ -43,6 +42,9 @@ type CreateResult struct {
 // transfer path (no upload/forward/attach); the CLI decides output/attach on the
 // returned sandbox. Steps mirror run.rs (§5.5).
 func Create(ctx context.Context, d CreateDeps, r *CreateRequest, ttyResolved bool) (*CreateResult, error) {
+	if r.Workspace == "" {
+		return nil, ErrEmptyWorkspace
+	}
 	// (0) --replace: delete and wait for any existing same-named sandbox
 	// first, so the create below never races a deletion still in flight.
 	if r.Replace {
@@ -120,12 +122,10 @@ func createSandboxRaw(ctx context.Context, gw gateway.Gateway, r *CreateRequest,
 	}
 
 	req := &pb.CreateSandboxRequest{
-		Spec:   rawSpec,
-		Name:   r.Name,
-		Labels: r.Labels,
-		WorkspaceScope: &dm.WorkspaceSelector{
-			Selection: &dm.WorkspaceSelector_Workspace{Workspace: r.Workspace},
-		},
+		Spec:           rawSpec,
+		Name:           r.Name,
+		Labels:         r.Labels,
+		WorkspaceScope: workspaceScope(r.Workspace),
 	}
 	sb, err := gw.CreateSandboxRaw(ctx, req)
 	if err != nil {

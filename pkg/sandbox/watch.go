@@ -76,14 +76,14 @@ func (e *ErrProvisionTimeout) Error() string {
 // ErrStreamEnded reports the watch stream ending before a terminal phase.
 var ErrStreamEnded = errors.New("sandbox provisioning stream ended before reaching terminal phase")
 
+// ErrEmptyWorkspace is returned when a workspace-scoped operation receives
+// an empty workspace string.
+var ErrEmptyWorkspace = errors.New("workspace must not be empty")
+
 // workspaceScope builds the WorkspaceSelector for raw proto requests that
-// require a workspace-scoped lookup (watch, exec, logs). Panics on empty
-// workspace so callers surface the bug at test time, not as a silent
-// server-side InvalidArgument.
+// require a workspace-scoped lookup (watch, exec, logs, create). Every
+// exported entry point validates workspace before calling this.
 func workspaceScope(workspace string) *dm.WorkspaceSelector {
-	if workspace == "" {
-		panic("workspaceScope called with empty workspace")
-	}
 	return &dm.WorkspaceSelector{
 		Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace},
 	}
@@ -101,6 +101,9 @@ const (
 // on provisioning-progress events. Ready is accepted only after a non-Ready
 // phase was seen (stale-Ready guard).
 func WatchUntilReady(ctx context.Context, gw gateway.Gateway, workspace, sandboxName string, initialPhase pb.SandboxPhase, idleTimeout time.Duration, gpuRequested bool, sink ProgressSink, clock Clock) (*WatchOutcome, error) {
+	if workspace == "" {
+		return nil, ErrEmptyWorkspace
+	}
 	if sink == nil {
 		sink = nopSink{}
 	}

@@ -87,6 +87,9 @@ type ExecDeps struct {
 // already read and size-checked, tty already resolved). Interactive (bidi) exec
 // is handled separately by ExecInteractive.
 func Exec(ctx context.Context, d ExecDeps, r *ExecRequest) (int, error) {
+	if r.Workspace == "" {
+		return 0, ErrEmptyWorkspace
+	}
 	sb, err := d.GW.GetSandbox(ctx, r.Workspace, r.Name)
 	if err != nil {
 		return 0, err

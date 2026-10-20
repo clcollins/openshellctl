@@ -154,6 +154,9 @@ type LogsDeps struct {
 // 6911-7013, A.9). The caller has resolved the sandbox id/name and normalised
 // the request (since computed, sources filtered, level upper-cased).
 func Logs(ctx context.Context, d LogsDeps, r *LogsRequest) error {
+	if r.Workspace == "" {
+		return ErrEmptyWorkspace
+	}
 	if r.Tail {
 		return tailLogs(ctx, d, r)
 	}

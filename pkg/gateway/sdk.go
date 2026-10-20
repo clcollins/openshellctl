@@ -314,7 +314,11 @@ func (c *client) TCPListen(ctx context.Context, workspace, sandbox string, remot
 }
 
 // workspaceScope builds the WorkspaceSelector oneof for raw proto requests.
+// Callers must validate workspace before calling; this is a thin builder.
 func workspaceScope(workspace string) *dm.WorkspaceSelector {
+	if workspace == "" {
+		panic("workspaceScope called with empty workspace — caller must validate")
+	}
 	return &dm.WorkspaceSelector{
 		Selection: &dm.WorkspaceSelector_Workspace{Workspace: workspace},
 	}
