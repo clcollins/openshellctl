@@ -167,9 +167,7 @@ func WatchUntilReady(ctx context.Context, gw gateway.Gateway, workspace, sandbox
 				sink.Error(reason)
 				return nil, &ErrProvisionFailed{Reason: reason}
 			case pb.SandboxPhase_SANDBOX_PHASE_COMPLETED:
-				reason := readyFalseCondition(sb)
-				sink.Error(reason)
-				return nil, &ErrProvisionFailed{Reason: reason}
+				return &WatchOutcome{Final: sb, Phase: phase}, nil
 			}
 		case ev.GetEvent() != nil:
 			e := ev.GetEvent()

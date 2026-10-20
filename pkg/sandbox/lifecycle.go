@@ -102,8 +102,9 @@ func watchUntilPhase(ctx context.Context, gw gateway.Gateway, workspace, sandbox
 		switch sb.GetStatus().GetPhase() {
 		case target:
 			return sb, nil
-		case pb.SandboxPhase_SANDBOX_PHASE_ERROR,
-			pb.SandboxPhase_SANDBOX_PHASE_COMPLETED:
+		case pb.SandboxPhase_SANDBOX_PHASE_COMPLETED:
+			return sb, nil
+		case pb.SandboxPhase_SANDBOX_PHASE_ERROR:
 			return nil, &ErrLifecycle{Target: targetName}
 		}
 	}

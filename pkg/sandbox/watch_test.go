@@ -154,7 +154,7 @@ func TestWatchUntilReady_ProgressResetsIdle(t *testing.T) {
 	}
 }
 
-func TestWatchUntilReady_CompletedIsTerminal(t *testing.T) {
+func TestWatchUntilReady_CompletedIsTerminalSuccess(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
 	gw.EXPECT().WatchSandbox(gomock.Any(), watchReqMatcher{workspace: "default", sandbox: "sb-1"}).Return(&scriptedStream{events: []*pb.SandboxStreamEvent{
@@ -163,10 +163,12 @@ func TestWatchUntilReady_CompletedIsTerminal(t *testing.T) {
 	}}, nil)
 
 	now := time.Unix(1000, 0)
-	_, err := WatchUntilReady(context.Background(), gw, "default", "sb-1", pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, time.Minute, false, nil, func() time.Time { return now })
-	var pf *ErrProvisionFailed
-	if !errors.As(err, &pf) {
-		t.Fatalf("err = %v, want ErrProvisionFailed for COMPLETED phase", err)
+	out, err := WatchUntilReady(context.Background(), gw, "default", "sb-1", pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING, time.Minute, false, nil, func() time.Time { return now })
+	if err != nil {
+		t.Fatalf("COMPLETED should be terminal success, got err = %v", err)
+	}
+	if out.Phase != pb.SandboxPhase_SANDBOX_PHASE_COMPLETED {
+		t.Errorf("phase = %v, want COMPLETED", out.Phase)
 	}
 }
 
