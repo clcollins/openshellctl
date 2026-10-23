@@ -230,7 +230,15 @@ func runGatewayAdd(cmd *cobra.Command, rawEndpoint, name string, force bool) err
 	// client-id/audience/scopes value flows into the persisted metadata.json
 	// exactly the way an OPENSHELL_* env var already does — Vault is treated
 	// as just another config source, not special-cased for this one command.
-	if err := applyVaultAuthSource(cmd.Context()); err != nil {
+	//
+	// Uses the ForNewGateway variant (no persisted-config fallback): this
+	// runs before the gateway being registered exists, so falling back to
+	// whatever OTHER gateway happens to be active's persisted Vault config
+	// would leak that gateway's credentials into this one (ROSAENG-74343
+	// review). An explicit --vault-kv-mount/--vault-kv-path on this `gateway
+	// add` invocation itself is unaffected — only the ambient fallback is
+	// disabled.
+	if err := applyVaultAuthSourceForNewGateway(cmd.Context()); err != nil {
 		return err
 	}
 
@@ -288,11 +296,20 @@ func runGatewayAdd(cmd *cobra.Command, rawEndpoint, name string, force bool) err
 	// previously-working registration outright (see rollbackFailedAdd).
 	previousMetadata, _ := w.ReadFile(gatewayconfig.GatewayDir(m.Name) + "/metadata.json")
 	previousToken, _ := w.ReadFile(gatewayconfig.GatewayDir(m.Name) + "/oidc_token.json")
+	previousVaultAuth, _ := w.ReadFile(gatewayconfig.GatewayDir(m.Name) + "/vault_auth.json")
 	if err := gatewayconfig.WriteGateway(w, env, m, force); err != nil {
 		return err
 	}
 	if err := gatewayconfig.SetActive(w, m.Name); err != nil {
 		return err
+	}
+	// Persist --vault-kv-mount/--vault-kv-path/--vault-field-prefix (when
+	// given) against this gateway, so later commands don't have to repeat
+	// them (ROSAENG-74343). Non-fatal: the gateway is already registered and
+	// usable via flags/env either way, so a write failure here is a warning,
+	// not a reason to fail the whole `gateway add`.
+	if perr := persistVaultAuthConfig(m.Name); perr != nil {
+		cmd.PrintErrf("warning: could not persist vault auth config: %v\n", perr)
 	}
 	cmd.Printf("✓ Gateway '%s' added and set as active\n", m.Name)
 	cmd.Printf("  Endpoint: %s\n", endpoint)
@@ -300,7 +317,7 @@ func runGatewayAdd(cmd *cobra.Command, rawEndpoint, name string, force bool) err
 	cmd.Println()
 
 	if err := authenticateNewGateway(cmd, m.Name); err != nil {
-		rollbackFailedAdd(w, m.Name, previousActive, hadActive, previousMetadata, previousToken)
+		rollbackFailedAdd(w, m.Name, previousActive, hadActive, previousMetadata, previousToken, previousVaultAuth)
 		return err
 	}
 	return nil
@@ -324,16 +341,17 @@ func readActiveGateway(env gatewayconfig.Env) (name string, hadActive bool) {
 // gateway behind, and a corrected retry hits GatewayExistsError until the
 // user discovers `gateway remove` themselves.
 //
-// previousMetadata/previousToken are the exact bytes a --force overwrite
-// replaced, or nil when there was nothing to overwrite (the normal,
-// non-force path). When non-nil, rollback restores those bytes instead of
-// deleting the files outright — otherwise force-overwriting a working
-// registration and then failing to authenticate the new one would destroy
-// the previous, still-good registration too, which is strictly worse than
-// the pre-rollback behavior for that case.
-func rollbackFailedAdd(w gatewayconfig.Writer, failedName, previousActive string, hadActive bool, previousMetadata, previousToken []byte) {
+// previousMetadata/previousToken/previousVaultAuth are the exact bytes a
+// --force overwrite replaced, or nil when there was nothing to overwrite
+// (the normal, non-force path). When non-nil, rollback restores those bytes
+// instead of deleting the files outright — otherwise force-overwriting a
+// working registration and then failing to authenticate the new one would
+// destroy the previous, still-good registration too, which is strictly
+// worse than the pre-rollback behavior for that case.
+func rollbackFailedAdd(w gatewayconfig.Writer, failedName, previousActive string, hadActive bool, previousMetadata, previousToken, previousVaultAuth []byte) {
 	metadataRel := gatewayconfig.GatewayDir(failedName) + "/metadata.json"
 	tokenRel := gatewayconfig.GatewayDir(failedName) + "/oidc_token.json"
+	vaultAuthRel := gatewayconfig.GatewayDir(failedName) + "/vault_auth.json"
 	if previousMetadata != nil {
 		_ = w.WriteFile(metadataRel, previousMetadata, 0o600)
 	} else {
@@ -343,6 +361,11 @@ func rollbackFailedAdd(w gatewayconfig.Writer, failedName, previousActive string
 		_ = w.WriteFile(tokenRel, previousToken, 0o600)
 	} else {
 		_ = w.Remove(tokenRel)
+	}
+	if previousVaultAuth != nil {
+		_ = w.WriteFile(vaultAuthRel, previousVaultAuth, 0o600)
+	} else {
+		_ = w.Remove(vaultAuthRel)
 	}
 	_ = gatewayconfig.ClearActiveIfMatches(w, failedName)
 	if hadActive {

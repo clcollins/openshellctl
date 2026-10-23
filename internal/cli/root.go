@@ -51,6 +51,7 @@ type persistentFlags struct {
 	vaultKVMount     string
 	vaultKVPath      string
 	vaultFieldPrefix string
+	noVault          bool
 }
 
 // NewRootCommand builds the full command tree. It is exported so tests (parity,
@@ -120,6 +121,7 @@ func registerPersistentFlags(root *cobra.Command, pf *persistentFlags) {
 	f.StringVar(&pf.vaultKVMount, "vault-kv-mount", "", "Vault KV v2 mount holding auth config, e.g. osd-sre (env OPENSHELL_VAULT_KV_MOUNT; must be set together with --vault-kv-path)")
 	f.StringVar(&pf.vaultKVPath, "vault-kv-path", "", "path within --vault-kv-mount holding auth config, e.g. rosa-agent (env OPENSHELL_VAULT_KV_PATH)")
 	f.StringVar(&pf.vaultFieldPrefix, "vault-field-prefix", "", "prefix prepended to each field name read from the Vault secret, e.g. hypershell (env OPENSHELL_VAULT_FIELD_PREFIX)")
+	f.BoolVar(&pf.noVault, "no-vault", false, "disable the Vault auth source entirely for this invocation — ignores --vault-kv-mount/--vault-kv-path/--vault-field-prefix and any persisted vault_auth.json for the resolved gateway (env OPENSHELL_NO_VAULT; ROSAENG-74343)")
 }
 
 // bindViper wires the OPENSHELL_* environment prefix and flag binding, per §5.9.

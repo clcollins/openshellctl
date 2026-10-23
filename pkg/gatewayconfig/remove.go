@@ -9,14 +9,24 @@ const activeGatewayRel = "active_gateway"
 
 // knownGatewayFiles are the files RemoveGateway removes: only the ones
 // openshellctl itself writes and can recreate from scratch (metadata.json,
-// oidc_token.json). last_sandbox and mtls/{ca.crt,tls.crt,tls.key} are
-// deliberately NOT here: a last_sandbox pointer is harmless to leave behind,
-// but mTLS material is typically admin-issued and not recoverable by this
-// CLI — removing a registration (e.g. to fix a typo'd endpoint and re-add it)
-// must never destroy a cert the user cannot get back.
+// oidc_token.json, vault_auth.json). last_sandbox and mtls/{ca.crt,tls.crt,
+// tls.key} are deliberately NOT here: a last_sandbox pointer is harmless to
+// leave behind, but mTLS material is typically admin-issued and not
+// recoverable by this CLI — removing a registration (e.g. to fix a typo'd
+// endpoint and re-add it) must never destroy a cert the user cannot get
+// back.
+//
+// vault_auth.json (ROSAENG-74343) is included even though it's "just a
+// pointer" like last_sandbox, because unlike last_sandbox it isn't harmless
+// to leave behind: it steers which Vault secret later commands read
+// credentials from. Leaving it behind after `remove` would mean re-adding
+// the same name (e.g. the "fix a typo'd endpoint" workflow this function's
+// own doc comment describes) silently inherits a previous, possibly
+// unrelated registration's Vault coordinates.
 var knownGatewayFiles = []string{
 	"metadata.json",
 	"oidc_token.json",
+	"vault_auth.json",
 }
 
 // SetActive writes name to the active_gateway pointer file.

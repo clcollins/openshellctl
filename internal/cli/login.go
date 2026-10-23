@@ -50,6 +50,22 @@ func runLogin(cmd *cobra.Command, _ []string) error {
 		return &UsageError{Err: fmt.Errorf("no gateway specified; use -g <name> or set OPENSHELL_GATEWAY")}
 	}
 
+	// Persist --vault-kv-mount/--vault-kv-path/--vault-field-prefix (when
+	// given) against this gateway, so later commands don't have to repeat
+	// them (ROSAENG-74343). Only for an actually-registered gateway
+	// (target.Resolved != nil) — an endpoint-only target's Name can be the
+	// raw endpoint string (gatewayconfig.Resolve's fallback), which is not a
+	// valid gateway name to key a persisted file on. Non-fatal and run
+	// before the actual OIDC login attempt below: this only records where
+	// the Vault coordinates came from, not whether login succeeds — a
+	// failed login shouldn't also discard a correctly-configured Vault
+	// pointer the user may fix the real problem (e.g. network) and retry.
+	if target.Resolved != nil {
+		if perr := persistVaultAuthConfig(target.Name); perr != nil {
+			cmd.PrintErrf("warning: could not persist vault auth config: %v\n", perr)
+		}
+	}
+
 	cmd.PrintErrln("Opening browser for OIDC authentication...")
 	return loginAndReport(cmd, target)
 }

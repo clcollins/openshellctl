@@ -140,6 +140,57 @@ authenticating the already-registered gateway, never in what gets persisted
 to disk), that's a new, explicit decision — not a side effect of adding a
 field to the Vault secret.
 
+### Persisting `--vault-kv-mount`/`--vault-kv-path`/`--vault-field-prefix` (ROSAENG-74343)
+
+`gateway add` and `gateway login`/`login` additionally persist whichever of
+`--vault-kv-mount`/`--vault-kv-path`/`--vault-field-prefix` were explicitly
+given (flag or `OPENSHELL_VAULT_*` env var) this invocation to
+`gateways/<name>/vault_auth.json` (`pkg/gatewayconfig/vaultauth.go`), via
+`persistVaultAuthConfig` (`internal/cli/vaultauth.go`). A later command whose
+own `--vault-kv-mount`/`--vault-kv-path` are both unset falls back to this
+file for whichever gateway it already resolves to — see
+`persistedVaultAuthConfig`, which calls `gatewayconfig.Resolve` with the
+exact same `--gateway-endpoint`/`--gateway`/`active_gateway` inputs every
+real call site uses (not a hand-rolled subset), so the persisted lookup can
+never disagree with which gateway the invocation is actually about. It's
+only tried from `resolveVaultAuthSource` when neither flag/env is set, so an
+explicit flag or env var on that later invocation still wins outright, same
+precedence `--vault-kv-mount`/`--vault-kv-path` already had relative to a
+Vault-sourced field. `--no-vault`/`OPENSHELL_NO_VAULT` disables the Vault
+source entirely for one invocation (explicit flags included), for whenever
+you need to bypass it without deleting the persisted file.
+
+Only the mount/path/prefix **coordinates** are ever persisted — never the
+Vault secret, or any field read from it. This is why a stale persisted file
+can't silently mask an expired Vault session: every command still performs
+a real Vault KV read against whatever Vault session is live at call time,
+so an expired `vault login` session fails that read exactly as it would
+without any persisted config.
+
+`gateway add`'s initial call site uses `applyVaultAuthSourceForNewGateway`,
+not the normal `applyVaultAuthSource` — it never falls back to a persisted
+config at all, only to its own invocation's explicit
+`--vault-kv-mount`/`--vault-kv-path`. This runs before the gateway being
+registered exists, so allowing the normal persisted-fallback here would mean
+a plain `gateway add <endpoint>` with no Vault flags of its own could read
+whatever OTHER gateway happens to be `active`'s persisted Vault secret and
+leak its `oidc-client-id`/`oidc-client-secret` into the new registration —
+found in review before this shipped. `gateway add` only writes
+`vault_auth.json` after the new registration's `metadata.json`/
+`active_gateway` are written, and `rollbackFailedAdd` restores (or removes)
+it on an authentication failure the same way it already does for
+`metadata.json`/`oidc_token.json`, so a rolled-back `add` doesn't leave an
+orphaned `vault_auth.json` keyed to a gateway that no longer exists.
+`gateway login`/`login` only persist for an already-registered gateway
+(`target.Resolved != nil`) — an endpoint-only invocation's `target.Name` can
+be the raw endpoint string, never a valid gateway name to key the file on.
+
+`gateway remove` deletes `vault_auth.json` along with `metadata.json`/
+`oidc_token.json` (`knownGatewayFiles`, `pkg/gatewayconfig/remove.go`) —
+unlike `last_sandbox`, which is left behind because it's harmless, a leftover
+`vault_auth.json` would steer a later re-`add` of the same name at a
+possibly-unrelated secret.
+
 ## Deferred: `--no-select` / `--no-login`
 
 `gateway add` does not currently accept `--no-select` (register without
