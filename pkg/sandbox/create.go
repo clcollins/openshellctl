@@ -53,11 +53,8 @@ func Create(ctx context.Context, d CreateDeps, r *CreateRequest, ttyResolved boo
 		}
 	}
 
-	// (1) provider inference from Command[0], unless --no-auto-providers.
-	inferred := inferProviderType(ctx, d.GW, r)
-
-	// (2) resolve providers (explicit + inferred).
-	if err := resolveRequestProviders(ctx, d.GW, r, inferred); err != nil {
+	// (1) resolve providers (explicit only; command-based inference removed in MCS-1410).
+	if err := resolveRequestProviders(ctx, d.GW, r, nil); err != nil {
 		return nil, err
 	}
 
@@ -219,25 +216,6 @@ func phaseName(p pb.SandboxPhase) types.SandboxPhase {
 	default:
 		return types.SandboxUnknown
 	}
-}
-
-// inferProviderType infers a provider type from Command[0] basename unless
-// --no-auto-providers, dropping the inference when providers_v2_enabled is true
-// (run.rs:494-513). Returns the inferred types (0 or 1).
-func inferProviderType(ctx context.Context, gw gateway.Gateway, r *CreateRequest) []string {
-	if r.AutoProviders != nil && !*r.AutoProviders {
-		return nil
-	}
-	tp, ok := DetectProviderFromCommand(r.Command)
-	if !ok {
-		return nil
-	}
-	if cfg, err := gw.GetGatewayConfig(ctx); err == nil && cfg != nil {
-		if v, ok := cfg.Settings["providers_v2_enabled"]; ok && v.Type == types.SettingValueBool && v.BoolVal {
-			return nil
-		}
-	}
-	return []string{tp}
 }
 
 // resolveRequestProviders resolves explicit + inferred providers against the

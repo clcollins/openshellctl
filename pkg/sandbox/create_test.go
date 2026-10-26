@@ -125,45 +125,6 @@ func TestToSDKSpec_DriverConfigCoerced(t *testing.T) {
 	}
 }
 
-func TestCreate_ProviderInferenceFromCommand(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	gw := mock.NewMockGateway(ctrl)
-	// providers_v2 disabled → inference kept; claude command → claude-code type.
-	gw.EXPECT().GetGatewayConfig(gomock.Any()).Return(&types.GatewayConfig{
-		Settings: map[string]types.SettingValue{"providers_v2_enabled": {Type: types.SettingValueBool, BoolVal: false}},
-	}, nil)
-	gw.EXPECT().ListProviders(gomock.Any(), "default", gomock.Any()).
-		Return([]*types.Provider{{Name: "cc", Type: "claude-code"}}, nil)
-	gw.EXPECT().CreateSandbox(gomock.Any(), "default", "sb", gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _, _ string, spec *types.SandboxSpec, _ map[string]string) (*types.Sandbox, error) {
-			if len(spec.Providers) != 1 || spec.Providers[0] != "cc" {
-				t.Errorf("inferred provider not attached: %v", spec.Providers)
-			}
-			return &types.Sandbox{Name: "sb"}, nil
-		})
-
-	req := &CreateRequest{Workspace: "default", Name: "sb", Command: []string{"/usr/bin/claude"}}
-	if _, err := Create(context.Background(), CreateDeps{GW: gw}, req, false); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestCreate_ProviderInferenceDroppedWhenV2Enabled(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	gw := mock.NewMockGateway(ctrl)
-	gw.EXPECT().GetGatewayConfig(gomock.Any()).Return(&types.GatewayConfig{
-		Settings: map[string]types.SettingValue{"providers_v2_enabled": {Type: types.SettingValueBool, BoolVal: true}},
-	}, nil)
-	// No ListProviders expected (inference dropped, no explicit providers).
-	gw.EXPECT().CreateSandbox(gomock.Any(), "default", "sb", gomock.Any(), gomock.Any()).
-		Return(&types.Sandbox{Name: "sb"}, nil)
-
-	req := &CreateRequest{Workspace: "default", Name: "sb", Command: []string{"/usr/bin/claude"}}
-	if _, err := Create(context.Background(), CreateDeps{GW: gw}, req, false); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestCreate_CredentialWarnings(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)

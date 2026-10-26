@@ -240,16 +240,6 @@ func TestNormalizeProviderType(t *testing.T) {
 	}
 }
 
-func TestDetectProviderFromCommand(t *testing.T) {
-	got, ok := DetectProviderFromCommand([]string{"/usr/bin/claude", "--flag"})
-	if !ok || got != "claude-code" {
-		t.Errorf("got %q,%v", got, ok)
-	}
-	if _, ok := DetectProviderFromCommand(nil); ok {
-		t.Error("empty command should not detect")
-	}
-}
-
 func TestResolveProviders(t *testing.T) {
 	known := []*types.Provider{
 		{Name: "my-openai", Type: "openai"},
