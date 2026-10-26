@@ -36,6 +36,7 @@ type fakeGateway struct {
 	failExtract     bool   // when true, the upload extract command reports non-zero
 	lastReqType     string // tracks the request type used for the interactive session ("shell", "exec", or "subsystem")
 	lastExecCmd     string // last exec command received
+	lastSubsystem   string // last subsystem name requested
 	rejectShell     bool   // when true, the server rejects shell requests (models a broken server)
 	keepaliveCount  int    // number of keepalive@openssh.com global requests received
 	rejectKeepalive bool   // when true, server replies false to keepalive requests (models unresponsive server)
@@ -147,9 +148,15 @@ func (f *fakeGateway) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 			name := decodeString(req.Payload)
 			f.mu.Lock()
 			f.lastReqType = "subsystem"
+			f.lastSubsystem = name
 			f.mu.Unlock()
+			accepted := name == "sftp" || name == "openshell-main"
 			if req.WantReply {
-				_ = req.Reply(name == "sftp", nil)
+				_ = req.Reply(accepted, nil)
+			}
+			if name == "openshell-main" {
+				f.runMain(ch)
+				sendExit(ch, f.mainExit)
 			}
 			_ = ch.Close()
 			return
