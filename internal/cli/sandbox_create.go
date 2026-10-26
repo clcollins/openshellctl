@@ -122,16 +122,26 @@ func newSandboxCreateCommand() *cobra.Command {
 
 			return withGatewayTarget(cmd, func(gw gateway.Gateway, target *gatewayconfig.Target) error {
 				ws := workspace()
-				// Tell the gateway to hold the main process until the SSH
-				// subsystem attach arrives, and mark the sandbox ephemeral so
-				// the gateway cleans it up when the session ends (no separate
-				// delete RPC needed).
-				if !req.Detach && req.Output == "table" {
+
+				// Determine TTY state once; used both to set the proto field and
+				// to decide whether to attach after Create.
+				stdinTTY := term.IsTerminal(int(os.Stdin.Fd()))
+				stdoutTTY := term.IsTerminal(int(os.Stdout.Fd()))
+
+				// Tell the gateway to hold the main process until the SSH subsystem
+				// attach arrives — but only when we will actually attach. We attach
+				// when: output is table, not detaching, and either !Keep (always
+				// attaches regardless of TTY) or both stdin and stdout are TTYs.
+				willAttach := !req.Detach && req.Output == "table" && (!req.Keep || (stdinTTY && stdoutTTY))
+				if willAttach {
 					req.AwaitMainProcessAttachment = true
 				}
+				// Mark the sandbox ephemeral so the gateway cleans it up when the
+				// session ends; the explicit DeleteSandbox call below is skipped.
 				if !req.Keep {
 					req.RetentionEphemeral = true
 				}
+
 				deps := sandbox.CreateDeps{
 					GW:          gw,
 					Env:         os.Getenv,
@@ -180,9 +190,6 @@ func newSandboxCreateCommand() *cobra.Command {
 					return renderSandbox(cmd, sb, req.Output)
 				}
 
-				stdinTTY := term.IsTerminal(int(os.Stdin.Fd()))
-				stdoutTTY := term.IsTerminal(int(os.Stdout.Fd()))
-
 				if req.Detach || (req.Keep && (!stdinTTY || !stdoutTTY)) {
 					return nil
 				}
@@ -201,12 +208,16 @@ func newSandboxCreateCommand() *cobra.Command {
 				}
 				code, cerr := tc.ConnectMainProcess(cmd.Context(), ws, sb.Name, useTTY, t)
 
-				// --no-keep: delete after session.
 				if !req.Keep {
-					if _, derr := gw.DeleteSandbox(cmd.Context(), ws, sb.Name); derr != nil {
-						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Failed to delete sandbox %s: %v\n", sb.Name, derr)
-					} else {
-						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Deleted sandbox %s\n", sb.Name)
+					// RetentionEphemeral: the gateway already cleaned up the sandbox
+					// when the main process exited; skip the explicit delete to avoid a
+					// spurious NotFound error/warning.
+					if !req.RetentionEphemeral {
+						if _, derr := gw.DeleteSandbox(cmd.Context(), ws, sb.Name); derr != nil {
+							_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Failed to delete sandbox %s: %v\n", sb.Name, derr)
+						} else {
+							_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Deleted sandbox %s\n", sb.Name)
+						}
 					}
 				} else {
 					saveLastSandbox(target, ws, sb.Name)
