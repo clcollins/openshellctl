@@ -122,6 +122,16 @@ func newSandboxCreateCommand() *cobra.Command {
 
 			return withGatewayTarget(cmd, func(gw gateway.Gateway, target *gatewayconfig.Target) error {
 				ws := workspace()
+				// Tell the gateway to hold the main process until the SSH
+				// subsystem attach arrives, and mark the sandbox ephemeral so
+				// the gateway cleans it up when the session ends (no separate
+				// delete RPC needed).
+				if !req.Detach && req.Output == "table" {
+					req.AwaitMainProcessAttachment = true
+				}
+				if !req.Keep {
+					req.RetentionEphemeral = true
+				}
 				deps := sandbox.CreateDeps{
 					GW:          gw,
 					Env:         os.Getenv,
@@ -189,7 +199,7 @@ func newSandboxCreateCommand() *cobra.Command {
 					stderr:   cmd.ErrOrStderr(),
 					isTTY:    stdinTTY,
 				}
-				code, cerr := tc.Connect(cmd.Context(), ws, sb.Name, useTTY, t, req.Command...)
+				code, cerr := tc.ConnectMainProcess(cmd.Context(), ws, sb.Name, useTTY, t)
 
 				// --no-keep: delete after session.
 				if !req.Keep {
