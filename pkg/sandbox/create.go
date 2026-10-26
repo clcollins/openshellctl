@@ -18,6 +18,12 @@ import (
 // carry the SDK SandboxPolicy; use an explicit --gpu N (SDK path) instead.
 var ErrRawGPUWithPolicy = errors.New("bare --gpu combined with a policy is not yet supported; use --gpu <count> with a policy")
 
+// ErrRawAttachWithPolicy is returned when AwaitMainProcessAttachment or
+// RetentionEphemeral forces the raw create path while a policy is also set.
+// The proto CreateSandboxRequest has no policy field; drop the policy or use
+// the SDK path (no attach/ephemeral flags).
+var ErrRawAttachWithPolicy = errors.New("--policy cannot be combined with await-main-process-attachment or ephemeral retention; the proto create path does not carry SDK policies")
+
 // CreateDeps are the dependencies for Create.
 type CreateDeps struct {
 	GW     gateway.Gateway
@@ -106,19 +112,25 @@ func createSandbox(ctx context.Context, gw gateway.Gateway, r *CreateRequest, tt
 // a types.Sandbox shell carrying id/name/phase for the caller.
 func createSandboxRaw(ctx context.Context, gw gateway.Gateway, r *CreateRequest, ttyResolved bool) (*types.Sandbox, error) {
 	rawSpec := &pb.SandboxSpec{
-		Environment:          r.Env,
-		Providers:            r.Providers,
-		Command:              commandOrDefault(r.Command),
-		Tty:                  ttyResolved,
-		ResourceRequirements: &pb.ResourceRequirements{Gpu: &pb.GpuResourceRequirements{Count: nil}},
+		Environment: r.Env,
+		Providers:   r.Providers,
+		Command:     commandOrDefault(r.Command),
+		Tty:         ttyResolved,
+	}
+	// GPU requirements only apply when the caller explicitly requested bare GPU;
+	// AwaitMainProcessAttachment and RetentionEphemeral also reach this path but
+	// must not inject a GPU request the user never asked for.
+	if r.UsesRawGPU() {
+		rawSpec.ResourceRequirements = &pb.ResourceRequirements{Gpu: &pb.GpuResourceRequirements{Count: nil}}
 	}
 	if tmpl := rawTemplate(r); tmpl != nil {
 		rawSpec.Template = tmpl
 	}
 	if r.Policy != nil {
-		// The raw create path (bare --gpu) cannot carry a SandboxPolicy in the
-		// proto CreateSandboxRequest; the SDK create path handles policies.
-		return nil, ErrRawGPUWithPolicy
+		if r.UsesRawGPU() {
+			return nil, ErrRawGPUWithPolicy
+		}
+		return nil, ErrRawAttachWithPolicy
 	}
 
 	req := &pb.CreateSandboxRequest{

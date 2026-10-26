@@ -259,6 +259,14 @@ func TestCreate_AwaitMainProcessAttachment_SetsRawField(t *testing.T) {
 			if !req.AwaitMainProcessAttachment {
 				t.Error("AwaitMainProcessAttachment should be true")
 			}
+			// RetentionEphemeral was false, so no retention annotation.
+			if got := req.Annotations["openshell.nvidia.com/retention"]; got != "" {
+				t.Errorf("retention annotation = %q, want empty when RetentionEphemeral=false", got)
+			}
+			// GPU was not requested, so no GPU resource requirements.
+			if req.Spec.ResourceRequirements != nil {
+				t.Errorf("unexpected GPU resource requirements: %+v", req.Spec.ResourceRequirements)
+			}
 			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
 		})
 
@@ -275,6 +283,14 @@ func TestCreate_RetentionEphemeral_SetsAnnotation(t *testing.T) {
 		DoAndReturn(func(_ context.Context, req *pb.CreateSandboxRequest) (*pb.Sandbox, error) {
 			if got := req.Annotations["openshell.nvidia.com/retention"]; got != "ephemeral" {
 				t.Errorf("retention annotation = %q, want %q", got, "ephemeral")
+			}
+			// AwaitMainProcessAttachment was false.
+			if req.AwaitMainProcessAttachment {
+				t.Error("AwaitMainProcessAttachment should be false when only RetentionEphemeral is set")
+			}
+			// GPU was not requested, so no GPU resource requirements.
+			if req.Spec.ResourceRequirements != nil {
+				t.Errorf("unexpected GPU resource requirements: %+v", req.Spec.ResourceRequirements)
 			}
 			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
 		})
@@ -298,10 +314,38 @@ func TestCreate_AwaitAndEphemeral_RoutesThroughRaw(t *testing.T) {
 			if got := req.Annotations["openshell.nvidia.com/retention"]; got != "ephemeral" {
 				t.Errorf("retention annotation = %q, want %q", got, "ephemeral")
 			}
+			if req.Spec.ResourceRequirements != nil {
+				t.Errorf("unexpected GPU resource requirements: %+v", req.Spec.ResourceRequirements)
+			}
 			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
 		})
 
 	r := &CreateRequest{Workspace: "default", Name: "sb", AwaitMainProcessAttachment: true, RetentionEphemeral: true}
+	if _, err := Create(context.Background(), CreateDeps{GW: gw}, r, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreate_BareGPU_NoAwaitOrEphemeralFields(t *testing.T) {
+	// Bare GPU (UsesRawGPU) must not set AwaitMainProcessAttachment or retention
+	// annotations when those fields are not in the request.
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().CreateSandboxRaw(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, req *pb.CreateSandboxRequest) (*pb.Sandbox, error) {
+			if req.AwaitMainProcessAttachment {
+				t.Error("bare GPU should not set AwaitMainProcessAttachment")
+			}
+			if got := req.Annotations["openshell.nvidia.com/retention"]; got != "" {
+				t.Errorf("bare GPU should not set retention annotation, got %q", got)
+			}
+			if req.Spec.ResourceRequirements == nil || req.Spec.ResourceRequirements.Gpu == nil {
+				t.Error("bare GPU should have GPU resource requirements")
+			}
+			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
+		})
+
+	r := &CreateRequest{Workspace: "default", Name: "sb", GPU: &v1alpha1.GPU{}}
 	if _, err := Create(context.Background(), CreateDeps{GW: gw}, r, false); err != nil {
 		t.Fatal(err)
 	}
