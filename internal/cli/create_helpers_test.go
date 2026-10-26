@@ -585,3 +585,42 @@ func TestBuildCreateFlags_NoPolicy(t *testing.T) {
 		t.Errorf("policy should be nil when no flag and no env: %+v", f.Policy)
 	}
 }
+
+// TestBuildCreateFlags_ApprovalModeDefault_DoesNotOverrideManifest verifies
+// that the cobra default "manual" for --approval-mode is NOT propagated when
+// the user did not explicitly pass the flag. Without this check, the flag's
+// default silently overwrites a manifest's approval-mode via
+// MergeManifestAndFlags's "flag non-empty wins" rule.
+func TestBuildCreateFlags_ApprovalModeDefault_DoesNotOverrideManifest(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("approval-mode", "manual", "")
+	// Flag registered but NOT set — simulates cobra after parsing with no
+	// --approval-mode argument. cmd.Flags().Changed("approval-mode") == false.
+
+	f, err := buildCreateFlags(cmd, createFlagInput{approvalMode: "manual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.ApprovalMode != "" {
+		t.Errorf("ApprovalMode = %q, want empty when flag not explicitly set", f.ApprovalMode)
+	}
+}
+
+// TestBuildCreateFlags_ApprovalModeExplicit verifies that an explicit
+// --approval-mode flag value IS propagated, so it wins over a manifest.
+func TestBuildCreateFlags_ApprovalModeExplicit(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("approval-mode", "manual", "")
+	// Simulate the user passing --approval-mode=auto.
+	if err := cmd.Flags().Set("approval-mode", "auto"); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := buildCreateFlags(cmd, createFlagInput{approvalMode: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.ApprovalMode != "auto" {
+		t.Errorf("ApprovalMode = %q, want %q when flag explicitly set", f.ApprovalMode, "auto")
+	}
+}

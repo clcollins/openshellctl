@@ -276,7 +276,6 @@ func buildCreateFlags(cmd *cobra.Command, in createFlagInput) (sandbox.CreateFla
 		CPU:                  in.cpu,
 		Memory:               in.memory,
 		Providers:            in.providers,
-		ApprovalMode:         in.approvalMode,
 		Output:               in.format,
 		Command:              in.command,
 		NoCredentialWarnings: in.noCredWarn,
@@ -284,6 +283,12 @@ func buildCreateFlags(cmd *cobra.Command, in createFlagInput) (sandbox.CreateFla
 		Detach:               in.detach,
 		Replace:              in.replace,
 		ReplaceTimeout:       in.replaceTimeout,
+	}
+	// Only propagate --approval-mode when the user explicitly passed it;
+	// the cobra default "manual" must not silently overwrite a manifest's
+	// approval-mode via MergeManifestAndFlags's "non-empty flag wins" rule.
+	if cmd.Flags().Changed("approval-mode") {
+		f.ApprovalMode = in.approvalMode
 	}
 	if in.tty != nil {
 		f.TTY = in.tty.Value()
