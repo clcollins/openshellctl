@@ -35,6 +35,15 @@ type CreateRequest struct {
 	Editor         string
 	Replace        bool
 	ReplaceTimeout time.Duration
+
+	// AwaitMainProcessAttachment tells the gateway to wait for the client to
+	// attach before the sandbox starts executing its main process. Set when
+	// the CLI will attach immediately after creation via ConnectMainProcess.
+	AwaitMainProcessAttachment bool
+	// RetentionEphemeral marks the sandbox for automatic deletion when its
+	// main process exits. Set when --no-keep is in effect so the gateway
+	// cleans up instead of requiring an explicit delete call.
+	RetentionEphemeral bool
 }
 
 // CreateFlags is the flag-side create input (before merging with a manifest).

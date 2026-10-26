@@ -290,6 +290,62 @@ func TestMerge_GPUFromManifest(t *testing.T) {
 // (Get, Delete, Get NotFound, Create): with Replace set, Create must check
 // for an existing sandbox, delete it, confirm it's gone, and only then
 // create the new one — in that exact order.
+func TestCreate_AwaitMainProcessAttachment_SetsRawField(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().CreateSandboxRaw(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, req *pb.CreateSandboxRequest) (*pb.Sandbox, error) {
+			if !req.AwaitMainProcessAttachment {
+				t.Error("AwaitMainProcessAttachment should be true")
+			}
+			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
+		})
+
+	r := &CreateRequest{Workspace: "default", Name: "sb", AwaitMainProcessAttachment: true}
+	if _, err := Create(context.Background(), CreateDeps{GW: gw}, r, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreate_RetentionEphemeral_SetsAnnotation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().CreateSandboxRaw(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, req *pb.CreateSandboxRequest) (*pb.Sandbox, error) {
+			if got := req.Annotations["openshell.nvidia.com/retention"]; got != "ephemeral" {
+				t.Errorf("retention annotation = %q, want %q", got, "ephemeral")
+			}
+			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
+		})
+
+	r := &CreateRequest{Workspace: "default", Name: "sb", RetentionEphemeral: true}
+	if _, err := Create(context.Background(), CreateDeps{GW: gw}, r, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreate_AwaitAndEphemeral_RoutesThroughRaw(t *testing.T) {
+	// Both AwaitMainProcessAttachment and RetentionEphemeral set without GPU
+	// must still route through the raw path.
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().CreateSandboxRaw(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, req *pb.CreateSandboxRequest) (*pb.Sandbox, error) {
+			if !req.AwaitMainProcessAttachment {
+				t.Error("AwaitMainProcessAttachment should be true")
+			}
+			if got := req.Annotations["openshell.nvidia.com/retention"]; got != "ephemeral" {
+				t.Errorf("retention annotation = %q, want %q", got, "ephemeral")
+			}
+			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
+		})
+
+	r := &CreateRequest{Workspace: "default", Name: "sb", AwaitMainProcessAttachment: true, RetentionEphemeral: true}
+	if _, err := Create(context.Background(), CreateDeps{GW: gw}, r, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCreate_Replace(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)

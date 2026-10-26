@@ -92,9 +92,12 @@ func Create(ctx context.Context, d CreateDeps, r *CreateRequest, ttyResolved boo
 	return &CreateResult{Sandbox: sb}, nil
 }
 
-// createSandbox dispatches to the SDK or raw create path.
+// createSandbox dispatches to the SDK or raw create path. The raw path is used
+// for bare --gpu (GPU resource requirements), AwaitMainProcessAttachment, and
+// RetentionEphemeral — all three require proto fields that the SDK create path
+// does not expose.
 func createSandbox(ctx context.Context, gw gateway.Gateway, r *CreateRequest, ttyResolved bool) (*types.Sandbox, error) {
-	if r.UsesRawGPU() {
+	if r.UsesRawGPU() || r.AwaitMainProcessAttachment || r.RetentionEphemeral {
 		return createSandboxRaw(ctx, gw, r, ttyResolved)
 	}
 	spec := ToSDKSpec(r, ttyResolved)
@@ -122,10 +125,14 @@ func createSandboxRaw(ctx context.Context, gw gateway.Gateway, r *CreateRequest,
 	}
 
 	req := &pb.CreateSandboxRequest{
-		Spec:           rawSpec,
-		Name:           r.Name,
-		Labels:         r.Labels,
-		WorkspaceScope: workspaceScope(r.Workspace),
+		Spec:                       rawSpec,
+		Name:                       r.Name,
+		Labels:                     r.Labels,
+		WorkspaceScope:             workspaceScope(r.Workspace),
+		AwaitMainProcessAttachment: r.AwaitMainProcessAttachment,
+	}
+	if r.RetentionEphemeral {
+		req.Annotations = map[string]string{"openshell.nvidia.com/retention": "ephemeral"}
 	}
 	sb, err := gw.CreateSandboxRaw(ctx, req)
 	if err != nil {
