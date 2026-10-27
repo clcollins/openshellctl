@@ -132,7 +132,7 @@ func newSandboxCreateCommand() *cobra.Command {
 				// attach arrives — but only when we will actually attach. We attach
 				// when: output is table, not detaching, and either !Keep (always
 				// attaches regardless of TTY) or both stdin and stdout are TTYs.
-				willAttach := !req.Detach && req.Output == "table" && (!req.Keep || (stdinTTY && stdoutTTY))
+				willAttach := shouldAttachAfterCreate(req, stdinTTY, stdoutTTY)
 				if willAttach {
 					req.AwaitMainProcessAttachment = true
 				}
@@ -190,7 +190,7 @@ func newSandboxCreateCommand() *cobra.Command {
 					return renderSandbox(cmd, sb, req.Output)
 				}
 
-				if req.Detach || (req.Keep && (!stdinTTY || !stdoutTTY)) {
+				if !willAttach {
 					return nil
 				}
 
@@ -609,6 +609,14 @@ func runCreateUploads(ctx context.Context, gw gateway.Gateway, ws, sbName string
 	}
 	_, _ = fmt.Fprintln(stderr, "  ✓ Files uploaded")
 	return nil
+}
+
+// shouldAttachAfterCreate reports whether the CLI will attach to the sandbox's
+// main process via ConnectMainProcess immediately after creation. The same
+// predicate controls whether AwaitMainProcessAttachment is set on the create
+// request; both must agree or the gateway may hold the process indefinitely.
+func shouldAttachAfterCreate(req *sandbox.CreateRequest, stdinTTY, stdoutTTY bool) bool {
+	return !req.Detach && req.Output == "table" && (!req.Keep || (stdinTTY && stdoutTTY))
 }
 
 // startForward starts port forwarding in the background (step 9).

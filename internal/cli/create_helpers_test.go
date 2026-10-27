@@ -12,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/openshift-online/openshellctl/pkg/api/v1alpha1"
+	"github.com/openshift-online/openshellctl/pkg/sandbox"
 )
 
 func TestLoadManifest_FileAndStdin(t *testing.T) {
@@ -583,6 +584,37 @@ func TestBuildCreateFlags_NoPolicy(t *testing.T) {
 	}
 	if f.Policy != nil {
 		t.Errorf("policy should be nil when no flag and no env: %+v", f.Policy)
+	}
+}
+
+// TestShouldAttachAfterCreate verifies the pure attach-predicate covers all
+// combinations of Detach, Output, Keep, and TTY state. This is the single
+// source of truth for both AwaitMainProcessAttachment and the post-create
+// "skip attach" guard; they must not drift.
+func TestShouldAttachAfterCreate(t *testing.T) {
+	table := []struct {
+		name                  string
+		detach, keep          bool
+		output                string
+		stdinTTY, stdoutTTY   bool
+		want                  bool
+	}{
+		{"interactive no-keep", false, false, "table", true, true, true},
+		{"interactive keep both-tty", false, true, "table", true, true, true},
+		{"interactive keep no-stdin-tty", false, true, "table", false, true, false},
+		{"interactive keep no-stdout-tty", false, true, "table", true, false, false},
+		{"interactive keep no-tty", false, true, "table", false, false, false},
+		{"detach", true, false, "table", true, true, false},
+		{"json output", false, false, "json", true, true, false},
+		{"yaml output", false, true, "yaml", false, false, false},
+	}
+	for _, tc := range table {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &sandbox.CreateRequest{Detach: tc.detach, Keep: tc.keep, Output: tc.output}
+			if got := shouldAttachAfterCreate(req, tc.stdinTTY, tc.stdoutTTY); got != tc.want {
+				t.Errorf("shouldAttachAfterCreate = %v, want %v", got, tc.want)
+			}
+		})
 	}
 }
 
