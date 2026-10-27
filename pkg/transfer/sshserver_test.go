@@ -38,6 +38,7 @@ type fakeGateway struct {
 	lastExecCmd     string // last exec command received
 	lastSubsystem   string // last subsystem name requested
 	rejectShell     bool   // when true, the server rejects shell requests (models a broken server)
+	noExitStatus    bool   // when true, the server closes the channel without sending exit-status
 	keepaliveCount  int    // number of keepalive@openssh.com global requests received
 	rejectKeepalive bool   // when true, server replies false to keepalive requests (models unresponsive server)
 }
@@ -120,13 +121,18 @@ func (f *fakeGateway) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 			f.mu.Lock()
 			f.lastReqType = "exec"
 			f.lastExecCmd = cmd
+			noExit := f.noExitStatus
 			f.mu.Unlock()
 			if f.isTarCommand(cmd) {
 				status := f.runShell(ch, cmd)
-				sendExit(ch, status)
+				if !noExit {
+					sendExit(ch, status)
+				}
 			} else {
 				f.runMain(ch)
-				sendExit(ch, f.mainExit)
+				if !noExit {
+					sendExit(ch, f.mainExit)
+				}
 			}
 			_ = ch.Close()
 			return
@@ -134,13 +140,16 @@ func (f *fakeGateway) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 			f.mu.Lock()
 			f.lastReqType = "shell"
 			reject := f.rejectShell
+			noExit := f.noExitStatus
 			f.mu.Unlock()
 			if req.WantReply {
 				_ = req.Reply(!reject, nil)
 			}
 			if !reject {
 				f.runMain(ch)
-				sendExit(ch, f.mainExit)
+				if !noExit {
+					sendExit(ch, f.mainExit)
+				}
 			}
 			_ = ch.Close()
 			return
@@ -149,6 +158,7 @@ func (f *fakeGateway) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 			f.mu.Lock()
 			f.lastReqType = "subsystem"
 			f.lastSubsystem = name
+			noExit := f.noExitStatus
 			f.mu.Unlock()
 			accepted := name == "sftp" || name == "openshell-main"
 			if req.WantReply {
@@ -156,7 +166,9 @@ func (f *fakeGateway) handleSession(ch ssh.Channel, reqs <-chan *ssh.Request) {
 			}
 			if name == "openshell-main" {
 				f.runMain(ch)
-				sendExit(ch, f.mainExit)
+				if !noExit {
+					sendExit(ch, f.mainExit)
+				}
 			}
 			_ = ch.Close()
 			return

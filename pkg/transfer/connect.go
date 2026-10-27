@@ -373,7 +373,10 @@ func (c *client) ConnectMainProcess(ctx context.Context, workspace, sandbox stri
 		if exitSet {
 			return exitCode, nil
 		}
-		return 0, nil
+		// No exit-status received: the main process was likely killed by a signal
+		// or the gateway lost contact with it. Return an error so callers (crons in
+		// particular) do not record the session as successful.
+		return 1, fmt.Errorf("ssh channel closed without exit-status: remote process may have been killed")
 	}
 }
 

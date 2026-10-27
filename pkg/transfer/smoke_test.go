@@ -438,6 +438,27 @@ func TestConnectMainProcess_DetachWorks(t *testing.T) {
 	}
 }
 
+// TestConnectMainProcess_NoExitStatus_ReturnsError verifies that when the SSH
+// channel closes without sending an exit-status request, ConnectMainProcess
+// returns an error rather than (0, nil). A killed or crashed main process may
+// not deliver exit-status; silently treating that as exit 0 would cause cron
+// jobs to record false success.
+func TestConnectMainProcess_NoExitStatus_ReturnsError(t *testing.T) {
+	c, gw := newTestClient(t, t.TempDir(), t.TempDir())
+	gw.mainReply = "some output\n"
+	gw.noExitStatus = true // server closes channel without sending exit-status
+
+	var out bytes.Buffer
+	_, err := c.ConnectMainProcess(context.Background(), "default", "sb", false,
+		NopTerminal{In: strings.NewReader(""), Out: &out, Err: &bytes.Buffer{}})
+	if err == nil {
+		t.Fatal("ConnectMainProcess must return an error when no exit-status was received")
+	}
+	if !strings.Contains(err.Error(), "exit-status") {
+		t.Errorf("error should mention exit-status, got: %v", err)
+	}
+}
+
 func TestConnectMainProcess_GatewayError(t *testing.T) {
 	c := &client{gw: tunnelErrGateway{}}
 	_, err := c.ConnectMainProcess(context.Background(), "default", "sb", false,
