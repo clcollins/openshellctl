@@ -393,6 +393,92 @@ func TestCreate_ReplaceNotFound_SkipsDeleteGoesStraightToCreate(t *testing.T) {
 	}
 }
 
+// TestCreate_PolicyWithAwait_DegradesToSDKPath verifies that when both a policy
+// and AwaitMainProcessAttachment are set, Create uses the SDK path (which carries
+// the policy) rather than erroring with ErrRawAttachWithPolicy. The awaiting
+// field is silently dropped and a warning is emitted to stderr.
+func TestCreate_PolicyWithAwait_DegradesToSDKPath(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	pol := &types.SandboxPolicy{Version: 1}
+	// Expect the SDK path (CreateSandbox), NOT the raw path (CreateSandboxRaw).
+	gw.EXPECT().CreateSandbox(gomock.Any(), "default", "sb", gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _ string, spec *types.SandboxSpec, _ map[string]string) (*types.Sandbox, error) {
+			if spec.Policy == nil {
+				t.Error("policy must be present on the SDK path")
+			}
+			return &types.Sandbox{Name: "sb"}, nil
+		})
+
+	var stderr strings.Builder
+	r := &CreateRequest{Workspace: "default", Name: "sb", Policy: pol, AwaitMainProcessAttachment: true}
+	_, err := Create(context.Background(), CreateDeps{GW: gw, Stderr: &stderr}, r, false)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "await-main-process-attachment") {
+		t.Errorf("expected await warning in stderr, got: %q", stderr.String())
+	}
+}
+
+// TestCreate_PolicyWithEphemeral_DegradesToSDKPath verifies that when both a
+// policy and RetentionEphemeral are set, Create uses the SDK path (which carries
+// the policy) rather than erroring. The ephemeral annotation is silently dropped
+// and a warning is emitted to stderr.
+func TestCreate_PolicyWithEphemeral_DegradesToSDKPath(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	pol := &types.SandboxPolicy{Version: 1}
+	gw.EXPECT().CreateSandbox(gomock.Any(), "default", "sb", gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _ string, spec *types.SandboxSpec, _ map[string]string) (*types.Sandbox, error) {
+			if spec.Policy == nil {
+				t.Error("policy must be present on the SDK path")
+			}
+			return &types.Sandbox{Name: "sb"}, nil
+		})
+
+	var stderr strings.Builder
+	r := &CreateRequest{Workspace: "default", Name: "sb", Policy: pol, RetentionEphemeral: true}
+	_, err := Create(context.Background(), CreateDeps{GW: gw, Stderr: &stderr}, r, false)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "ephemeral") {
+		t.Errorf("expected ephemeral warning in stderr, got: %q", stderr.String())
+	}
+}
+
+// TestCreate_PolicyWithAwaitAndEphemeral_DegradesToSDKPath verifies that when
+// policy, AwaitMainProcessAttachment, and RetentionEphemeral are all set, Create
+// uses the SDK path and emits both warnings.
+func TestCreate_PolicyWithAwaitAndEphemeral_DegradesToSDKPath(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	pol := &types.SandboxPolicy{Version: 1}
+	gw.EXPECT().CreateSandbox(gomock.Any(), "default", "sb", gomock.Any(), gomock.Any()).
+		Return(&types.Sandbox{Name: "sb"}, nil)
+
+	var stderr strings.Builder
+	r := &CreateRequest{
+		Workspace:                  "default",
+		Name:                       "sb",
+		Policy:                     pol,
+		AwaitMainProcessAttachment: true,
+		RetentionEphemeral:         true,
+	}
+	_, err := Create(context.Background(), CreateDeps{GW: gw, Stderr: &stderr}, r, false)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	warn := stderr.String()
+	if !strings.Contains(warn, "await-main-process-attachment") {
+		t.Errorf("expected await warning in stderr, got: %q", warn)
+	}
+	if !strings.Contains(warn, "ephemeral") {
+		t.Errorf("expected ephemeral warning in stderr, got: %q", warn)
+	}
+}
+
 // TestCreate_ReplaceDeleteRPCError_AbortsBeforeCreate is the ticket's second
 // acceptance criterion end to end through Create: a delete RPC failure
 // during replace must abort — Create is never called, and the real error

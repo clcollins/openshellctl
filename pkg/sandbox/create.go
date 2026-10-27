@@ -18,12 +18,6 @@ import (
 // carry the SDK SandboxPolicy; use an explicit --gpu N (SDK path) instead.
 var ErrRawGPUWithPolicy = errors.New("bare --gpu combined with a policy is not yet supported; use --gpu <count> with a policy")
 
-// ErrRawAttachWithPolicy is returned when AwaitMainProcessAttachment or
-// RetentionEphemeral forces the raw create path while a policy is also set.
-// The proto CreateSandboxRequest has no policy field; drop the policy or use
-// the SDK path (no attach/ephemeral flags).
-var ErrRawAttachWithPolicy = errors.New("--policy cannot be combined with await-main-process-attachment or ephemeral retention; the proto create path does not carry SDK policies")
-
 // CreateDeps are the dependencies for Create.
 type CreateDeps struct {
 	GW     gateway.Gateway
@@ -72,7 +66,7 @@ func Create(ctx context.Context, d CreateDeps, r *CreateRequest, ttyResolved boo
 	}
 
 	// (4) create (SDK, or raw for bare --gpu).
-	sb, err := createSandbox(ctx, d.GW, r, ttyResolved)
+	sb, err := createSandbox(ctx, d.GW, r, ttyResolved, d.Stderr)
 	if err != nil {
 		return nil, err
 	}
@@ -96,11 +90,34 @@ func Create(ctx context.Context, d CreateDeps, r *CreateRequest, ttyResolved boo
 }
 
 // createSandbox dispatches to the SDK or raw create path. The raw path is used
-// for bare --gpu (GPU resource requirements), AwaitMainProcessAttachment, and
-// RetentionEphemeral — all three require proto fields that the SDK create path
-// does not expose.
-func createSandbox(ctx context.Context, gw gateway.Gateway, r *CreateRequest, ttyResolved bool) (*types.Sandbox, error) {
-	if r.UsesRawGPU() || r.AwaitMainProcessAttachment || r.RetentionEphemeral {
+// for bare --gpu (UsesRawGPU), AwaitMainProcessAttachment, and RetentionEphemeral
+// — all three require proto fields the SDK create path does not expose.
+//
+// Exception: when a policy is also set, the raw proto path cannot carry it
+// (CreateSandboxRequest has no policy field). In that case we degrade to the SDK
+// path — the policy takes effect, and AwaitMainProcessAttachment/RetentionEphemeral
+// are dropped with a warning to stderr. Bare --gpu + policy is still an error
+// because the GPU resource requirement has no SDK equivalent.
+func createSandbox(ctx context.Context, gw gateway.Gateway, r *CreateRequest, ttyResolved bool, stderr io.Writer) (*types.Sandbox, error) {
+	needsRaw := r.UsesRawGPU() || r.AwaitMainProcessAttachment || r.RetentionEphemeral
+	if needsRaw && r.Policy != nil {
+		if r.UsesRawGPU() {
+			return nil, ErrRawGPUWithPolicy
+		}
+		// Policy + await/ephemeral: degrade to the SDK path so the policy applies.
+		// The proto raw path has no policy field; await and ephemeral are silently
+		// dropped. The subsystem attach alone still prevents double-exec (the primary
+		// MCS-1410 fix); await only protects early output and the fast-exit race.
+		if r.AwaitMainProcessAttachment && stderr != nil {
+			_, _ = io.WriteString(stderr, "Warning: --policy is set; skipping await-main-process-attachment (subsystem attach alone still prevents double-exec)\n")
+		}
+		if r.RetentionEphemeral && stderr != nil {
+			_, _ = io.WriteString(stderr, "Warning: --policy is set; ephemeral retention is unavailable; delete the sandbox manually after the session\n")
+		}
+		spec := ToSDKSpec(r, ttyResolved)
+		return gw.CreateSandbox(ctx, r.Workspace, r.Name, spec, r.Labels)
+	}
+	if needsRaw {
 		return createSandboxRaw(ctx, gw, r, ttyResolved)
 	}
 	spec := ToSDKSpec(r, ttyResolved)
@@ -127,10 +144,9 @@ func createSandboxRaw(ctx context.Context, gw gateway.Gateway, r *CreateRequest,
 		rawSpec.Template = tmpl
 	}
 	if r.Policy != nil {
-		if r.UsesRawGPU() {
-			return nil, ErrRawGPUWithPolicy
-		}
-		return nil, ErrRawAttachWithPolicy
+		// Only UsesRawGPU reaches here with a policy set; await+ephemeral+policy
+		// was degraded to the SDK path in createSandbox before this call.
+		return nil, ErrRawGPUWithPolicy
 	}
 
 	req := &pb.CreateSandboxRequest{
