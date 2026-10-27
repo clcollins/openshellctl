@@ -172,6 +172,10 @@ func newSandboxCreateCommand() *cobra.Command {
 				// (8) Uploads.
 				if len(req.Uploads) > 0 {
 					if err := runCreateUploads(cmd.Context(), gw, ws, sb.Name, req.Uploads, req, cmd.ErrOrStderr()); err != nil {
+						// If we set AwaitMainProcessAttachment, the gateway is holding the
+						// main process open waiting for an attach that will never come.
+						// Best-effort delete so the gateway releases it.
+						deleteIfAwaiting(gw, ws, sb.Name, req, cmd.ErrOrStderr())
 						return err
 					}
 				}
@@ -181,6 +185,7 @@ func newSandboxCreateCommand() *cobra.Command {
 					forwardCtx, forwardCancel := context.WithCancel(cmd.Context())
 					defer forwardCancel()
 					if err := startForward(forwardCtx, gw, ws, sb.Name, req.Forward, cmd.ErrOrStderr()); err != nil {
+						deleteIfAwaiting(gw, ws, sb.Name, req, cmd.ErrOrStderr())
 						return err
 					}
 				}
@@ -212,10 +217,14 @@ func newSandboxCreateCommand() *cobra.Command {
 					// RetentionEphemeral: the gateway already cleaned up the sandbox
 					// when the main process exited; skip the explicit delete to avoid a
 					// spurious NotFound error/warning.
-					if !req.RetentionEphemeral {
-						if _, derr := gw.DeleteSandbox(cmd.Context(), ws, sb.Name); derr != nil {
+					//
+					// Exception: if ConnectMainProcess itself failed (SSH dial error etc.),
+					// the main process may never have started so ephemeral cleanup won't
+					// fire. Best-effort delete in that case.
+					if !req.RetentionEphemeral || cerr != nil {
+						if _, derr := gw.DeleteSandbox(context.Background(), ws, sb.Name); derr != nil {
 							_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Failed to delete sandbox %s: %v\n", sb.Name, derr)
-						} else {
+						} else if !req.RetentionEphemeral {
 							_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Deleted sandbox %s\n", sb.Name)
 						}
 					}
@@ -609,6 +618,21 @@ func runCreateUploads(ctx context.Context, gw gateway.Gateway, ws, sbName string
 	}
 	_, _ = fmt.Fprintln(stderr, "  ✓ Files uploaded")
 	return nil
+}
+
+// deleteIfAwaiting does a best-effort sandbox delete when
+// req.AwaitMainProcessAttachment is set. It is called on error paths between
+// sandbox creation and the ConnectMainProcess call: without a delete the
+// gateway holds the main process open indefinitely waiting for an attach that
+// will never arrive. Uses context.Background() so a cancelled cmd.Context()
+// does not prevent cleanup.
+func deleteIfAwaiting(gw gateway.Gateway, ws, name string, req *sandbox.CreateRequest, stderr io.Writer) {
+	if !req.AwaitMainProcessAttachment {
+		return
+	}
+	if _, err := gw.DeleteSandbox(context.Background(), ws, name); err != nil {
+		_, _ = fmt.Fprintf(stderr, "Warning: failed to clean up sandbox %s after aborted attach: %v\n", name, err)
+	}
 }
 
 // shouldAttachAfterCreate reports whether the CLI will attach to the sandbox's
