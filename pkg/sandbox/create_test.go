@@ -247,10 +247,9 @@ func TestMerge_GPUFromManifest(t *testing.T) {
 	}
 }
 
-// TestCreate_Replace is the ticket's explicit "ordered-expectation test"
-// (Get, Delete, Get NotFound, Create): with Replace set, Create must check
-// for an existing sandbox, delete it, confirm it's gone, and only then
-// create the new one — in that exact order.
+// TestCreate_AwaitMainProcessAttachment_SetsRawField verifies that
+// AwaitMainProcessAttachment routes through the raw proto path and the field
+// is set on the request; the SDK path is never called.
 func TestCreate_AwaitMainProcessAttachment_SetsRawField(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
@@ -456,7 +455,12 @@ func TestCreate_PolicyWithAwaitAndEphemeral_DegradesToSDKPath(t *testing.T) {
 	gw := mock.NewMockGateway(ctrl)
 	pol := &types.SandboxPolicy{Version: 1}
 	gw.EXPECT().CreateSandbox(gomock.Any(), "default", "sb", gomock.Any(), gomock.Any()).
-		Return(&types.Sandbox{Name: "sb"}, nil)
+		DoAndReturn(func(_ context.Context, _, _ string, spec *types.SandboxSpec, _ map[string]string) (*types.Sandbox, error) {
+			if spec.Policy == nil {
+				t.Error("policy must be present on the SDK path")
+			}
+			return &types.Sandbox{Name: "sb"}, nil
+		})
 
 	var stderr strings.Builder
 	r := &CreateRequest{

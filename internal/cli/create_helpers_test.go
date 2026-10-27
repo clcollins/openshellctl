@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,8 +11,10 @@ import (
 
 	types "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
 	"github.com/spf13/cobra"
+	"go.uber.org/mock/gomock"
 
 	"github.com/openshift-online/openshellctl/pkg/api/v1alpha1"
+	"github.com/openshift-online/openshellctl/pkg/gateway/mock"
 	"github.com/openshift-online/openshellctl/pkg/sandbox"
 )
 
@@ -654,5 +657,54 @@ func TestBuildCreateFlags_ApprovalModeExplicit(t *testing.T) {
 	}
 	if f.ApprovalMode != "auto" {
 		t.Errorf("ApprovalMode = %q, want %q when flag explicitly set", f.ApprovalMode, "auto")
+	}
+}
+
+// TestDeleteIfAwaiting_Noop verifies that deleteIfAwaiting is a no-op when
+// AwaitMainProcessAttachment is false — no delete RPC is issued.
+func TestDeleteIfAwaiting_Noop(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	// No DeleteSandbox expectation — gomock will fail the test if it's called.
+
+	req := &sandbox.CreateRequest{AwaitMainProcessAttachment: false}
+	var stderr bytes.Buffer
+	deleteIfAwaiting(gw, "default", "sb", req, &stderr)
+	if stderr.Len() != 0 {
+		t.Errorf("expected no stderr output, got: %q", stderr.String())
+	}
+}
+
+// TestDeleteIfAwaiting_DeleteSuccess verifies that deleteIfAwaiting calls
+// DeleteSandbox when AwaitMainProcessAttachment is true and emits no warning.
+func TestDeleteIfAwaiting_DeleteSuccess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().DeleteSandbox(gomock.Any(), "default", "sb").Return(true, nil)
+
+	req := &sandbox.CreateRequest{AwaitMainProcessAttachment: true}
+	var stderr bytes.Buffer
+	deleteIfAwaiting(gw, "default", "sb", req, &stderr)
+	if stderr.Len() != 0 {
+		t.Errorf("expected no stderr output on success, got: %q", stderr.String())
+	}
+}
+
+// TestDeleteIfAwaiting_DeleteError verifies that deleteIfAwaiting logs a
+// warning to stderr when DeleteSandbox returns an error, rather than
+// propagating the error.
+func TestDeleteIfAwaiting_DeleteError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().DeleteSandbox(gomock.Any(), "default", "sb").Return(false, fmt.Errorf("rpc failure"))
+
+	req := &sandbox.CreateRequest{AwaitMainProcessAttachment: true}
+	var stderr bytes.Buffer
+	deleteIfAwaiting(gw, "default", "sb", req, &stderr)
+	if !strings.Contains(stderr.String(), "Warning") {
+		t.Errorf("expected warning in stderr, got: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "rpc failure") {
+		t.Errorf("expected error text in stderr, got: %q", stderr.String())
 	}
 }

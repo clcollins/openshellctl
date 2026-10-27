@@ -108,11 +108,17 @@ func createSandbox(ctx context.Context, gw gateway.Gateway, r *CreateRequest, tt
 		// The proto raw path has no policy field; await and ephemeral are silently
 		// dropped. The subsystem attach alone still prevents double-exec (the primary
 		// MCS-1410 fix); await only protects early output and the fast-exit race.
-		if r.AwaitMainProcessAttachment && stderr != nil {
-			_, _ = io.WriteString(stderr, "Warning: --policy is set; skipping await-main-process-attachment (subsystem attach alone still prevents double-exec)\n")
+		if r.AwaitMainProcessAttachment {
+			r.AwaitMainProcessAttachment = false
+			if stderr != nil {
+				_, _ = io.WriteString(stderr, "Warning: --policy is set; skipping await-main-process-attachment (subsystem attach alone still prevents double-exec)\n")
+			}
 		}
-		if r.RetentionEphemeral && stderr != nil {
-			_, _ = io.WriteString(stderr, "Warning: --policy is set; ephemeral retention is unavailable; delete the sandbox manually after the session\n")
+		if r.RetentionEphemeral {
+			r.RetentionEphemeral = false
+			if stderr != nil {
+				_, _ = io.WriteString(stderr, "Warning: --policy is set; ephemeral retention is unavailable; delete the sandbox manually after the session\n")
+			}
 		}
 		spec := ToSDKSpec(r, ttyResolved)
 		return gw.CreateSandbox(ctx, r.Workspace, r.Name, spec, r.Labels)

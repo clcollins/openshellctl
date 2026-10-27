@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -218,10 +219,12 @@ func newSandboxCreateCommand() *cobra.Command {
 					// when the main process exited; skip the explicit delete to avoid a
 					// spurious NotFound error/warning.
 					//
-					// Exception: if ConnectMainProcess itself failed (SSH dial error etc.),
-					// the main process may never have started so ephemeral cleanup won't
-					// fire. Best-effort delete in that case.
-					if !req.RetentionEphemeral || cerr != nil {
+					// Exception: if ConnectMainProcess itself failed with a transport-level
+					// error (SSH dial error etc.), the main process may never have started
+					// so ephemeral cleanup won't fire. ErrNoExitStatus is NOT a transport
+					// error — the session completed; the gateway fired ephemeral cleanup.
+					isTransportErr := cerr != nil && !errors.Is(cerr, transfer.ErrNoExitStatus)
+					if !req.RetentionEphemeral || isTransportErr {
 						if _, derr := gw.DeleteSandbox(context.Background(), ws, sb.Name); derr != nil {
 							_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Failed to delete sandbox %s: %v\n", sb.Name, derr)
 						} else if !req.RetentionEphemeral {
