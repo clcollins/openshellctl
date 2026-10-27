@@ -454,8 +454,8 @@ func TestConnectMainProcess_NoExitStatus_ReturnsError(t *testing.T) {
 	if err == nil {
 		t.Fatal("ConnectMainProcess must return an error when no exit-status was received")
 	}
-	if !strings.Contains(err.Error(), "exit-status") {
-		t.Errorf("error should mention exit-status, got: %v", err)
+	if !errors.Is(err, ErrNoExitStatus) {
+		t.Errorf("error should be ErrNoExitStatus, got: %v", err)
 	}
 }
 

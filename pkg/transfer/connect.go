@@ -12,6 +12,13 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// ErrNoExitStatus is returned by ConnectMainProcess when the SSH channel closes
+// without delivering an exit-status request. The remote process may have been
+// killed by a signal or the gateway may have lost contact with it. Callers
+// that need to distinguish this from a transport-level dial failure can use
+// errors.Is against this sentinel.
+var ErrNoExitStatus = errors.New("ssh channel closed without exit-status: remote process may have been killed")
+
 // detach chord bytes: Ctrl-P (0x10) then Ctrl-Q (0x11).
 const (
 	ctrlP = 0x10
@@ -374,9 +381,10 @@ func (c *client) ConnectMainProcess(ctx context.Context, workspace, sandbox stri
 			return exitCode, nil
 		}
 		// No exit-status received: the main process was likely killed by a signal
-		// or the gateway lost contact with it. Return an error so callers (crons in
-		// particular) do not record the session as successful.
-		return 1, fmt.Errorf("ssh channel closed without exit-status: remote process may have been killed")
+		// or the gateway lost contact with it. Return a sentinel so callers (crons
+		// in particular) do not record the session as successful.  The returned
+		// code is unspecified when ErrNoExitStatus is non-nil.
+		return 0, ErrNoExitStatus
 	}
 }
 
