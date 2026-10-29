@@ -50,7 +50,7 @@ func newSandboxConnectCommand() *cobra.Command {
 					stderr:   cmd.ErrOrStderr(),
 					isTTY:    stdinTTY,
 				}
-				code, err := tc.Connect(cmd.Context(), ws, sbName, useTTY, t)
+				code, err := tc.ConnectMainProcess(cmd.Context(), ws, sbName, useTTY, t)
 				if err != nil {
 					return err
 				}

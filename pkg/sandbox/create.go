@@ -53,11 +53,8 @@ func Create(ctx context.Context, d CreateDeps, r *CreateRequest, ttyResolved boo
 		}
 	}
 
-	// (1) provider inference from Command[0], unless --no-auto-providers.
-	inferred := inferProviderType(ctx, d.GW, r)
-
-	// (2) resolve providers (explicit + inferred).
-	if err := resolveRequestProviders(ctx, d.GW, r, inferred); err != nil {
+	// (1) resolve providers (explicit only; command-based inference removed in MCS-1410).
+	if err := resolveRequestProviders(ctx, d.GW, r, nil); err != nil {
 		return nil, err
 	}
 
@@ -69,7 +66,7 @@ func Create(ctx context.Context, d CreateDeps, r *CreateRequest, ttyResolved boo
 	}
 
 	// (4) create (SDK, or raw for bare --gpu).
-	sb, err := createSandbox(ctx, d.GW, r, ttyResolved)
+	sb, err := createSandbox(ctx, d.GW, r, ttyResolved, d.Stderr)
 	if err != nil {
 		return nil, err
 	}
@@ -92,40 +89,82 @@ func Create(ctx context.Context, d CreateDeps, r *CreateRequest, ttyResolved boo
 	return &CreateResult{Sandbox: sb}, nil
 }
 
-// createSandbox dispatches to the SDK or raw create path.
-func createSandbox(ctx context.Context, gw gateway.Gateway, r *CreateRequest, ttyResolved bool) (*types.Sandbox, error) {
-	if r.UsesRawGPU() {
+// createSandbox dispatches to the SDK or raw create path. The raw path is used
+// for bare --gpu (UsesRawGPU), AwaitMainProcessAttachment, and RetentionEphemeral
+// — all three require proto fields the SDK create path does not expose.
+//
+// Exception: when a policy is also set, the raw proto path cannot carry it
+// (CreateSandboxRequest has no policy field). In that case we degrade to the SDK
+// path — the policy takes effect, and AwaitMainProcessAttachment/RetentionEphemeral
+// are dropped with a warning to stderr. Bare --gpu + policy is still an error
+// because the GPU resource requirement has no SDK equivalent.
+func createSandbox(ctx context.Context, gw gateway.Gateway, r *CreateRequest, ttyResolved bool, stderr io.Writer) (*types.Sandbox, error) {
+	needsRaw := r.UsesRawGPU() || r.AwaitMainProcessAttachment || r.RetentionEphemeral
+	if needsRaw && r.Policy != nil {
+		if r.UsesRawGPU() {
+			return nil, ErrRawGPUWithPolicy
+		}
+		// Policy + await/ephemeral: degrade to the SDK path so the policy applies.
+		// The proto raw path has no policy field; await and ephemeral are silently
+		// dropped. The subsystem attach alone still prevents double-exec (the primary
+		// MCS-1410 fix); await only protects early output and the fast-exit race.
+		if r.AwaitMainProcessAttachment {
+			r.AwaitMainProcessAttachment = false
+			if stderr != nil {
+				_, _ = io.WriteString(stderr, "Warning: --policy is set; skipping await-main-process-attachment (subsystem attach alone still prevents double-exec)\n")
+			}
+		}
+		if r.RetentionEphemeral {
+			r.RetentionEphemeral = false
+			if stderr != nil {
+				_, _ = io.WriteString(stderr, "Warning: --policy is set; ephemeral retention is unavailable; delete the sandbox manually after the session\n")
+			}
+		}
+		spec := ToSDKSpec(r, ttyResolved)
+		return gw.CreateSandbox(ctx, r.Workspace, r.Name, spec, r.Labels)
+	}
+	if needsRaw {
 		return createSandboxRaw(ctx, gw, r, ttyResolved)
 	}
 	spec := ToSDKSpec(r, ttyResolved)
 	return gw.CreateSandbox(ctx, r.Workspace, r.Name, spec, r.Labels)
 }
 
-// createSandboxRaw builds a raw CreateSandboxRequest for the bare --gpu case
-// (ResourceRequirements{Gpu:{Count:nil}}), then converts the returned proto to
-// a types.Sandbox shell carrying id/name/phase for the caller.
+// createSandboxRaw builds a raw CreateSandboxRequest for requests that require
+// proto fields the SDK create path does not expose: bare --gpu
+// (ResourceRequirements{Gpu:{Count:nil}}), counted --gpu N combined with
+// await/ephemeral, AwaitMainProcessAttachment, and RetentionEphemeral.
 func createSandboxRaw(ctx context.Context, gw gateway.Gateway, r *CreateRequest, ttyResolved bool) (*types.Sandbox, error) {
 	rawSpec := &pb.SandboxSpec{
-		Environment:          r.Env,
-		Providers:            r.Providers,
-		Command:              commandOrDefault(r.Command),
-		Tty:                  ttyResolved,
-		ResourceRequirements: &pb.ResourceRequirements{Gpu: &pb.GpuResourceRequirements{Count: nil}},
+		Environment: r.Env,
+		Providers:   r.Providers,
+		Command:     commandOrDefault(r.Command),
+		Tty:         ttyResolved,
+	}
+	// GPU requirements apply whenever the caller requested a GPU — bare
+	// (Count nil) or counted. Await/ephemeral routing must not drop a
+	// counted request that the SDK path (ToSDKSpec.GPUCount) would carry.
+	if r.GPU != nil {
+		rawSpec.ResourceRequirements = &pb.ResourceRequirements{Gpu: &pb.GpuResourceRequirements{Count: r.GPU.Count}}
 	}
 	if tmpl := rawTemplate(r); tmpl != nil {
 		rawSpec.Template = tmpl
 	}
 	if r.Policy != nil {
-		// The raw create path (bare --gpu) cannot carry a SandboxPolicy in the
-		// proto CreateSandboxRequest; the SDK create path handles policies.
+		// Only UsesRawGPU reaches here with a policy set; await+ephemeral+policy
+		// was degraded to the SDK path in createSandbox before this call.
 		return nil, ErrRawGPUWithPolicy
 	}
 
 	req := &pb.CreateSandboxRequest{
-		Spec:           rawSpec,
-		Name:           r.Name,
-		Labels:         r.Labels,
-		WorkspaceScope: workspaceScope(r.Workspace),
+		Spec:                       rawSpec,
+		Name:                       r.Name,
+		Labels:                     r.Labels,
+		WorkspaceScope:             workspaceScope(r.Workspace),
+		AwaitMainProcessAttachment: r.AwaitMainProcessAttachment,
+	}
+	if r.RetentionEphemeral {
+		req.Annotations = map[string]string{"openshell.nvidia.com/retention": "ephemeral"}
 	}
 	sb, err := gw.CreateSandboxRaw(ctx, req)
 	if err != nil {
@@ -212,25 +251,6 @@ func phaseName(p pb.SandboxPhase) types.SandboxPhase {
 	default:
 		return types.SandboxUnknown
 	}
-}
-
-// inferProviderType infers a provider type from Command[0] basename unless
-// --no-auto-providers, dropping the inference when providers_v2_enabled is true
-// (run.rs:494-513). Returns the inferred types (0 or 1).
-func inferProviderType(ctx context.Context, gw gateway.Gateway, r *CreateRequest) []string {
-	if r.AutoProviders != nil && !*r.AutoProviders {
-		return nil
-	}
-	tp, ok := DetectProviderFromCommand(r.Command)
-	if !ok {
-		return nil
-	}
-	if cfg, err := gw.GetGatewayConfig(ctx); err == nil && cfg != nil {
-		if v, ok := cfg.Settings["providers_v2_enabled"]; ok && v.Type == types.SettingValueBool && v.BoolVal {
-			return nil
-		}
-	}
-	return []string{tp}
 }
 
 // resolveRequestProviders resolves explicit + inferred providers against the

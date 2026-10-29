@@ -34,6 +34,14 @@ type Client interface {
 	// terminal integration (raw mode, size, resize notifications); pass a
 	// nopTerminal for non-interactive callers.
 	Connect(ctx context.Context, workspace, sandbox string, tty bool, term Terminal, command ...string) (exitCode int, err error)
+	// ConnectMainProcess attaches to the sandbox's main process via the SSH
+	// subsystem "openshell-main", returning the main process exit code. Unlike
+	// Connect, it never exec's a command (the main process was already started at
+	// sandbox boot via spec.command) and does not spawn a login shell. This is the
+	// correct attach path for 0.1.x gateways; using Connect with a command or the
+	// shell request would spawn a second process or a new login shell instead of
+	// attaching to the main process.
+	ConnectMainProcess(ctx context.Context, workspace, sandbox string, tty bool, term Terminal) (exitCode int, err error)
 }
 
 // Clock abstracts time for tests (keepalive scheduling).

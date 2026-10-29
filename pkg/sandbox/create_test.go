@@ -125,45 +125,6 @@ func TestToSDKSpec_DriverConfigCoerced(t *testing.T) {
 	}
 }
 
-func TestCreate_ProviderInferenceFromCommand(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	gw := mock.NewMockGateway(ctrl)
-	// providers_v2 disabled → inference kept; claude command → claude-code type.
-	gw.EXPECT().GetGatewayConfig(gomock.Any()).Return(&types.GatewayConfig{
-		Settings: map[string]types.SettingValue{"providers_v2_enabled": {Type: types.SettingValueBool, BoolVal: false}},
-	}, nil)
-	gw.EXPECT().ListProviders(gomock.Any(), "default", gomock.Any()).
-		Return([]*types.Provider{{Name: "cc", Type: "claude-code"}}, nil)
-	gw.EXPECT().CreateSandbox(gomock.Any(), "default", "sb", gomock.Any(), gomock.Any()).
-		DoAndReturn(func(_ context.Context, _, _ string, spec *types.SandboxSpec, _ map[string]string) (*types.Sandbox, error) {
-			if len(spec.Providers) != 1 || spec.Providers[0] != "cc" {
-				t.Errorf("inferred provider not attached: %v", spec.Providers)
-			}
-			return &types.Sandbox{Name: "sb"}, nil
-		})
-
-	req := &CreateRequest{Workspace: "default", Name: "sb", Command: []string{"/usr/bin/claude"}}
-	if _, err := Create(context.Background(), CreateDeps{GW: gw}, req, false); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestCreate_ProviderInferenceDroppedWhenV2Enabled(t *testing.T) {
-	ctrl := gomock.NewController(t)
-	gw := mock.NewMockGateway(ctrl)
-	gw.EXPECT().GetGatewayConfig(gomock.Any()).Return(&types.GatewayConfig{
-		Settings: map[string]types.SettingValue{"providers_v2_enabled": {Type: types.SettingValueBool, BoolVal: true}},
-	}, nil)
-	// No ListProviders expected (inference dropped, no explicit providers).
-	gw.EXPECT().CreateSandbox(gomock.Any(), "default", "sb", gomock.Any(), gomock.Any()).
-		Return(&types.Sandbox{Name: "sb"}, nil)
-
-	req := &CreateRequest{Workspace: "default", Name: "sb", Command: []string{"/usr/bin/claude"}}
-	if _, err := Create(context.Background(), CreateDeps{GW: gw}, req, false); err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestCreate_CredentialWarnings(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
@@ -286,10 +247,175 @@ func TestMerge_GPUFromManifest(t *testing.T) {
 	}
 }
 
-// TestCreate_Replace is the ticket's explicit "ordered-expectation test"
-// (Get, Delete, Get NotFound, Create): with Replace set, Create must check
-// for an existing sandbox, delete it, confirm it's gone, and only then
-// create the new one — in that exact order.
+// TestCreate_AwaitMainProcessAttachment_SetsRawField verifies that
+// AwaitMainProcessAttachment routes through the raw proto path and the field
+// is set on the request; the SDK path is never called.
+func TestCreate_AwaitMainProcessAttachment_SetsRawField(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().CreateSandboxRaw(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, req *pb.CreateSandboxRequest) (*pb.Sandbox, error) {
+			if !req.AwaitMainProcessAttachment {
+				t.Error("AwaitMainProcessAttachment should be true")
+			}
+			// RetentionEphemeral was false, so no retention annotation.
+			if got := req.Annotations["openshell.nvidia.com/retention"]; got != "" {
+				t.Errorf("retention annotation = %q, want empty when RetentionEphemeral=false", got)
+			}
+			// GPU was not requested, so no GPU resource requirements.
+			if req.Spec.ResourceRequirements != nil {
+				t.Errorf("unexpected GPU resource requirements: %+v", req.Spec.ResourceRequirements)
+			}
+			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
+		})
+
+	r := &CreateRequest{Workspace: "default", Name: "sb", AwaitMainProcessAttachment: true}
+	if _, err := Create(context.Background(), CreateDeps{GW: gw}, r, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreate_RetentionEphemeral_SetsAnnotation(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().CreateSandboxRaw(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, req *pb.CreateSandboxRequest) (*pb.Sandbox, error) {
+			if got := req.Annotations["openshell.nvidia.com/retention"]; got != "ephemeral" {
+				t.Errorf("retention annotation = %q, want %q", got, "ephemeral")
+			}
+			// AwaitMainProcessAttachment was false.
+			if req.AwaitMainProcessAttachment {
+				t.Error("AwaitMainProcessAttachment should be false when only RetentionEphemeral is set")
+			}
+			// GPU was not requested, so no GPU resource requirements.
+			if req.Spec.ResourceRequirements != nil {
+				t.Errorf("unexpected GPU resource requirements: %+v", req.Spec.ResourceRequirements)
+			}
+			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
+		})
+
+	r := &CreateRequest{Workspace: "default", Name: "sb", RetentionEphemeral: true}
+	if _, err := Create(context.Background(), CreateDeps{GW: gw}, r, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreate_AwaitAndEphemeral_RoutesThroughRaw(t *testing.T) {
+	// Both AwaitMainProcessAttachment and RetentionEphemeral set without GPU
+	// must still route through the raw path.
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().CreateSandboxRaw(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, req *pb.CreateSandboxRequest) (*pb.Sandbox, error) {
+			if !req.AwaitMainProcessAttachment {
+				t.Error("AwaitMainProcessAttachment should be true")
+			}
+			if got := req.Annotations["openshell.nvidia.com/retention"]; got != "ephemeral" {
+				t.Errorf("retention annotation = %q, want %q", got, "ephemeral")
+			}
+			if req.Spec.ResourceRequirements != nil {
+				t.Errorf("unexpected GPU resource requirements: %+v", req.Spec.ResourceRequirements)
+			}
+			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
+		})
+
+	r := &CreateRequest{Workspace: "default", Name: "sb", AwaitMainProcessAttachment: true, RetentionEphemeral: true}
+	if _, err := Create(context.Background(), CreateDeps{GW: gw}, r, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestCreate_BareGPU_NoAwaitOrEphemeralFields(t *testing.T) {
+	// Bare GPU (UsesRawGPU) must not set AwaitMainProcessAttachment or retention
+	// annotations when those fields are not in the request.
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().CreateSandboxRaw(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, req *pb.CreateSandboxRequest) (*pb.Sandbox, error) {
+			if req.AwaitMainProcessAttachment {
+				t.Error("bare GPU should not set AwaitMainProcessAttachment")
+			}
+			if got := req.Annotations["openshell.nvidia.com/retention"]; got != "" {
+				t.Errorf("bare GPU should not set retention annotation, got %q", got)
+			}
+			if req.Spec.ResourceRequirements == nil || req.Spec.ResourceRequirements.Gpu == nil {
+				t.Error("bare GPU should have GPU resource requirements")
+			}
+			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
+		})
+
+	r := &CreateRequest{Workspace: "default", Name: "sb", GPU: &v1alpha1.GPU{}}
+	if _, err := Create(context.Background(), CreateDeps{GW: gw}, r, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCreate_CountedGPUWithAwait_CarriesGPUCount verifies that a counted GPU
+// request (--gpu 2) combined with AwaitMainProcessAttachment routes through the
+// raw path and carries the GPU count in ResourceRequirements — not dropped.
+func TestCreate_CountedGPUWithAwait_CarriesGPUCount(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().CreateSandboxRaw(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, req *pb.CreateSandboxRequest) (*pb.Sandbox, error) {
+			if req.Spec.ResourceRequirements == nil || req.Spec.ResourceRequirements.Gpu == nil {
+				t.Errorf("GPU resource requirements missing on raw path: %+v", req.Spec)
+			} else if req.Spec.ResourceRequirements.Gpu.Count == nil {
+				t.Error("counted GPU should carry non-nil Count")
+			} else if got := *req.Spec.ResourceRequirements.Gpu.Count; got != 2 {
+				t.Errorf("GPU Count = %d, want 2", got)
+			}
+			if !req.AwaitMainProcessAttachment {
+				t.Error("AwaitMainProcessAttachment should be true")
+			}
+			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
+		})
+
+	cnt := uint32(2)
+	r := &CreateRequest{
+		Workspace:                  "default",
+		Name:                       "sb",
+		GPU:                        &v1alpha1.GPU{Count: &cnt},
+		AwaitMainProcessAttachment: true,
+	}
+	if _, err := Create(context.Background(), CreateDeps{GW: gw}, r, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCreate_CountedGPUWithEphemeral_CarriesGPUCount verifies that a counted
+// GPU request (--gpu 2) combined with RetentionEphemeral routes through the raw
+// path and carries both the GPU count and the retention annotation.
+func TestCreate_CountedGPUWithEphemeral_CarriesGPUCount(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().CreateSandboxRaw(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, req *pb.CreateSandboxRequest) (*pb.Sandbox, error) {
+			if req.Spec.ResourceRequirements == nil || req.Spec.ResourceRequirements.Gpu == nil {
+				t.Errorf("GPU resource requirements missing on raw path: %+v", req.Spec)
+			} else if req.Spec.ResourceRequirements.Gpu.Count == nil {
+				t.Error("counted GPU should carry non-nil Count")
+			} else if got := *req.Spec.ResourceRequirements.Gpu.Count; got != 2 {
+				t.Errorf("GPU Count = %d, want 2", got)
+			}
+			if got := req.Annotations["openshell.nvidia.com/retention"]; got != "ephemeral" {
+				t.Errorf("retention annotation = %q, want %q", got, "ephemeral")
+			}
+			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
+		})
+
+	cnt := uint32(2)
+	r := &CreateRequest{
+		Workspace:          "default",
+		Name:               "sb",
+		GPU:                &v1alpha1.GPU{Count: &cnt},
+		RetentionEphemeral: true,
+	}
+	if _, err := Create(context.Background(), CreateDeps{GW: gw}, r, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCreate_Replace(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
@@ -329,6 +455,97 @@ func TestCreate_ReplaceNotFound_SkipsDeleteGoesStraightToCreate(t *testing.T) {
 	req := &CreateRequest{Workspace: "default", Name: "sb", Image: "img", Replace: true, ReplaceTimeout: time.Minute}
 	if _, err := Create(context.Background(), CreateDeps{GW: gw}, req, false); err != nil {
 		t.Fatalf("Create --replace (nothing to replace): %v", err)
+	}
+}
+
+// TestCreate_PolicyWithAwait_DegradesToSDKPath verifies that when both a policy
+// and AwaitMainProcessAttachment are set, Create uses the SDK path (which carries
+// the policy) rather than erroring with ErrRawAttachWithPolicy. The awaiting
+// field is silently dropped and a warning is emitted to stderr.
+func TestCreate_PolicyWithAwait_DegradesToSDKPath(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	pol := &types.SandboxPolicy{Version: 1}
+	// Expect the SDK path (CreateSandbox), NOT the raw path (CreateSandboxRaw).
+	gw.EXPECT().CreateSandbox(gomock.Any(), "default", "sb", gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _ string, spec *types.SandboxSpec, _ map[string]string) (*types.Sandbox, error) {
+			if spec.Policy == nil {
+				t.Error("policy must be present on the SDK path")
+			}
+			return &types.Sandbox{Name: "sb"}, nil
+		})
+
+	var stderr strings.Builder
+	r := &CreateRequest{Workspace: "default", Name: "sb", Policy: pol, AwaitMainProcessAttachment: true}
+	_, err := Create(context.Background(), CreateDeps{GW: gw, Stderr: &stderr}, r, false)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "await-main-process-attachment") {
+		t.Errorf("expected await warning in stderr, got: %q", stderr.String())
+	}
+}
+
+// TestCreate_PolicyWithEphemeral_DegradesToSDKPath verifies that when both a
+// policy and RetentionEphemeral are set, Create uses the SDK path (which carries
+// the policy) rather than erroring. The ephemeral annotation is silently dropped
+// and a warning is emitted to stderr.
+func TestCreate_PolicyWithEphemeral_DegradesToSDKPath(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	pol := &types.SandboxPolicy{Version: 1}
+	gw.EXPECT().CreateSandbox(gomock.Any(), "default", "sb", gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _ string, spec *types.SandboxSpec, _ map[string]string) (*types.Sandbox, error) {
+			if spec.Policy == nil {
+				t.Error("policy must be present on the SDK path")
+			}
+			return &types.Sandbox{Name: "sb"}, nil
+		})
+
+	var stderr strings.Builder
+	r := &CreateRequest{Workspace: "default", Name: "sb", Policy: pol, RetentionEphemeral: true}
+	_, err := Create(context.Background(), CreateDeps{GW: gw, Stderr: &stderr}, r, false)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	if !strings.Contains(stderr.String(), "ephemeral") {
+		t.Errorf("expected ephemeral warning in stderr, got: %q", stderr.String())
+	}
+}
+
+// TestCreate_PolicyWithAwaitAndEphemeral_DegradesToSDKPath verifies that when
+// policy, AwaitMainProcessAttachment, and RetentionEphemeral are all set, Create
+// uses the SDK path and emits both warnings.
+func TestCreate_PolicyWithAwaitAndEphemeral_DegradesToSDKPath(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	pol := &types.SandboxPolicy{Version: 1}
+	gw.EXPECT().CreateSandbox(gomock.Any(), "default", "sb", gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, _, _ string, spec *types.SandboxSpec, _ map[string]string) (*types.Sandbox, error) {
+			if spec.Policy == nil {
+				t.Error("policy must be present on the SDK path")
+			}
+			return &types.Sandbox{Name: "sb"}, nil
+		})
+
+	var stderr strings.Builder
+	r := &CreateRequest{
+		Workspace:                  "default",
+		Name:                       "sb",
+		Policy:                     pol,
+		AwaitMainProcessAttachment: true,
+		RetentionEphemeral:         true,
+	}
+	_, err := Create(context.Background(), CreateDeps{GW: gw, Stderr: &stderr}, r, false)
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	warn := stderr.String()
+	if !strings.Contains(warn, "await-main-process-attachment") {
+		t.Errorf("expected await warning in stderr, got: %q", warn)
+	}
+	if !strings.Contains(warn, "ephemeral") {
+		t.Errorf("expected ephemeral warning in stderr, got: %q", warn)
 	}
 }
 

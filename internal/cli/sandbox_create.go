@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -122,6 +123,26 @@ func newSandboxCreateCommand() *cobra.Command {
 
 			return withGatewayTarget(cmd, func(gw gateway.Gateway, target *gatewayconfig.Target) error {
 				ws := workspace()
+
+				// Determine TTY state once; used both to set the proto field and
+				// to decide whether to attach after Create.
+				stdinTTY := term.IsTerminal(int(os.Stdin.Fd()))
+				stdoutTTY := term.IsTerminal(int(os.Stdout.Fd()))
+
+				// Tell the gateway to hold the main process until the SSH subsystem
+				// attach arrives — but only when we will actually attach. We attach
+				// when: output is table, not detaching, and either !Keep (always
+				// attaches regardless of TTY) or both stdin and stdout are TTYs.
+				willAttach := shouldAttachAfterCreate(req, stdinTTY, stdoutTTY)
+				if willAttach {
+					req.AwaitMainProcessAttachment = true
+				}
+				// Mark the sandbox ephemeral so the gateway cleans it up when the
+				// session ends; the explicit DeleteSandbox call below is skipped.
+				if !req.Keep {
+					req.RetentionEphemeral = true
+				}
+
 				deps := sandbox.CreateDeps{
 					GW:          gw,
 					Env:         os.Getenv,
@@ -152,6 +173,10 @@ func newSandboxCreateCommand() *cobra.Command {
 				// (8) Uploads.
 				if len(req.Uploads) > 0 {
 					if err := runCreateUploads(cmd.Context(), gw, ws, sb.Name, req.Uploads, req, cmd.ErrOrStderr()); err != nil {
+						// If we set AwaitMainProcessAttachment, the gateway is holding the
+						// main process open waiting for an attach that will never come.
+						// Best-effort delete so the gateway releases it.
+						deleteIfAwaiting(gw, ws, sb.Name, req, cmd.ErrOrStderr())
 						return err
 					}
 				}
@@ -161,6 +186,7 @@ func newSandboxCreateCommand() *cobra.Command {
 					forwardCtx, forwardCancel := context.WithCancel(cmd.Context())
 					defer forwardCancel()
 					if err := startForward(forwardCtx, gw, ws, sb.Name, req.Forward, cmd.ErrOrStderr()); err != nil {
+						deleteIfAwaiting(gw, ws, sb.Name, req, cmd.ErrOrStderr())
 						return err
 					}
 				}
@@ -170,10 +196,7 @@ func newSandboxCreateCommand() *cobra.Command {
 					return renderSandbox(cmd, sb, req.Output)
 				}
 
-				stdinTTY := term.IsTerminal(int(os.Stdin.Fd()))
-				stdoutTTY := term.IsTerminal(int(os.Stdout.Fd()))
-
-				if req.Detach || (req.Keep && (!stdinTTY || !stdoutTTY)) {
+				if !willAttach {
 					return nil
 				}
 
@@ -189,14 +212,24 @@ func newSandboxCreateCommand() *cobra.Command {
 					stderr:   cmd.ErrOrStderr(),
 					isTTY:    stdinTTY,
 				}
-				code, cerr := tc.Connect(cmd.Context(), ws, sb.Name, useTTY, t, req.Command...)
+				code, cerr := tc.ConnectMainProcess(cmd.Context(), ws, sb.Name, useTTY, t)
 
-				// --no-keep: delete after session.
 				if !req.Keep {
-					if _, derr := gw.DeleteSandbox(cmd.Context(), ws, sb.Name); derr != nil {
-						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Failed to delete sandbox %s: %v\n", sb.Name, derr)
-					} else {
-						_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Deleted sandbox %s\n", sb.Name)
+					// RetentionEphemeral: the gateway already cleaned up the sandbox
+					// when the main process exited; skip the explicit delete to avoid a
+					// spurious NotFound error/warning.
+					//
+					// Exception: if ConnectMainProcess itself failed with a transport-level
+					// error (SSH dial error etc.), the main process may never have started
+					// so ephemeral cleanup won't fire. ErrNoExitStatus is NOT a transport
+					// error — the session completed; the gateway fired ephemeral cleanup.
+					isTransportErr := cerr != nil && !errors.Is(cerr, transfer.ErrNoExitStatus)
+					if !req.RetentionEphemeral || isTransportErr {
+						if _, derr := gw.DeleteSandbox(context.Background(), ws, sb.Name); derr != nil {
+							_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Failed to delete sandbox %s: %v\n", sb.Name, derr)
+						} else if !req.RetentionEphemeral {
+							_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Deleted sandbox %s\n", sb.Name)
+						}
 					}
 				} else {
 					saveLastSandbox(target, ws, sb.Name)
@@ -276,7 +309,6 @@ func buildCreateFlags(cmd *cobra.Command, in createFlagInput) (sandbox.CreateFla
 		CPU:                  in.cpu,
 		Memory:               in.memory,
 		Providers:            in.providers,
-		ApprovalMode:         in.approvalMode,
 		Output:               in.format,
 		Command:              in.command,
 		NoCredentialWarnings: in.noCredWarn,
@@ -284,6 +316,12 @@ func buildCreateFlags(cmd *cobra.Command, in createFlagInput) (sandbox.CreateFla
 		Detach:               in.detach,
 		Replace:              in.replace,
 		ReplaceTimeout:       in.replaceTimeout,
+	}
+	// Only propagate --approval-mode when the user explicitly passed it;
+	// the cobra default "manual" must not silently overwrite a manifest's
+	// approval-mode via MergeManifestAndFlags's "non-empty flag wins" rule.
+	if cmd.Flags().Changed("approval-mode") {
+		f.ApprovalMode = in.approvalMode
 	}
 	if in.tty != nil {
 		f.TTY = in.tty.Value()
@@ -583,6 +621,29 @@ func runCreateUploads(ctx context.Context, gw gateway.Gateway, ws, sbName string
 	}
 	_, _ = fmt.Fprintln(stderr, "  ✓ Files uploaded")
 	return nil
+}
+
+// deleteIfAwaiting does a best-effort sandbox delete when
+// req.AwaitMainProcessAttachment is set. It is called on error paths between
+// sandbox creation and the ConnectMainProcess call: without a delete the
+// gateway holds the main process open indefinitely waiting for an attach that
+// will never arrive. Uses context.Background() so a cancelled cmd.Context()
+// does not prevent cleanup.
+func deleteIfAwaiting(gw gateway.Gateway, ws, name string, req *sandbox.CreateRequest, stderr io.Writer) {
+	if !req.AwaitMainProcessAttachment {
+		return
+	}
+	if _, err := gw.DeleteSandbox(context.Background(), ws, name); err != nil {
+		_, _ = fmt.Fprintf(stderr, "Warning: failed to clean up sandbox %s after aborted attach: %v\n", name, err)
+	}
+}
+
+// shouldAttachAfterCreate reports whether the CLI will attach to the sandbox's
+// main process via ConnectMainProcess immediately after creation. The same
+// predicate controls whether AwaitMainProcessAttachment is set on the create
+// request; both must agree or the gateway may hold the process indefinitely.
+func shouldAttachAfterCreate(req *sandbox.CreateRequest, stdinTTY, stdoutTTY bool) bool {
+	return !req.Detach && req.Output == "table" && (!req.Keep || (stdinTTY && stdoutTTY))
 }
 
 // startForward starts port forwarding in the background (step 9).

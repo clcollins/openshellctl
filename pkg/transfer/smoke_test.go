@@ -379,6 +379,95 @@ func TestConnect_KeepalivesSent(t *testing.T) {
 	}
 }
 
+func TestConnectMainProcess_UsesSubsystem(t *testing.T) {
+	c, gw := newTestClient(t, t.TempDir(), t.TempDir())
+	gw.mainReply = "main process output\n"
+	gw.mainExit = 5
+
+	var out bytes.Buffer
+	code, err := c.ConnectMainProcess(context.Background(), "default", "sb", false,
+		NopTerminal{In: strings.NewReader(""), Out: &out, Err: &bytes.Buffer{}})
+	if err != nil {
+		t.Fatalf("ConnectMainProcess: %v", err)
+	}
+	if code != 5 {
+		t.Errorf("exit code = %d, want 5", code)
+	}
+	if !strings.Contains(out.String(), "main process output") {
+		t.Errorf("stdout = %q, want main process output", out.String())
+	}
+
+	gw.mu.Lock()
+	reqType := gw.lastReqType
+	subsystem := gw.lastSubsystem
+	gw.mu.Unlock()
+	if reqType != "subsystem" {
+		t.Errorf("ConnectMainProcess request type = %q, want \"subsystem\"", reqType)
+	}
+	if subsystem != "openshell-main" {
+		t.Errorf("subsystem = %q, want \"openshell-main\"", subsystem)
+	}
+}
+
+func TestConnectMainProcess_ExitCodeReturned(t *testing.T) {
+	c, gw := newTestClient(t, t.TempDir(), t.TempDir())
+	gw.mainExit = 42
+
+	code, err := c.ConnectMainProcess(context.Background(), "default", "sb", false,
+		NopTerminal{In: strings.NewReader(""), Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
+	if err != nil {
+		t.Fatalf("ConnectMainProcess: %v", err)
+	}
+	if code != 42 {
+		t.Errorf("exit code = %d, want 42", code)
+	}
+}
+
+func TestConnectMainProcess_DetachWorks(t *testing.T) {
+	c, gw := newTestClient(t, t.TempDir(), t.TempDir())
+	gw.mainExit = 7
+	gw.mainHold = true
+
+	code, err := c.ConnectMainProcess(context.Background(), "default", "sb", false,
+		NopTerminal{In: bytes.NewReader([]byte{ctrlP, ctrlQ}), Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
+	if err != nil {
+		t.Fatalf("ConnectMainProcess: %v", err)
+	}
+	if code != 0 {
+		t.Errorf("detach exit code = %d, want 0", code)
+	}
+}
+
+// TestConnectMainProcess_NoExitStatus_ReturnsError verifies that when the SSH
+// channel closes without sending an exit-status request, ConnectMainProcess
+// returns an error rather than (0, nil). A killed or crashed main process may
+// not deliver exit-status; silently treating that as exit 0 would cause cron
+// jobs to record false success.
+func TestConnectMainProcess_NoExitStatus_ReturnsError(t *testing.T) {
+	c, gw := newTestClient(t, t.TempDir(), t.TempDir())
+	gw.mainReply = "some output\n"
+	gw.noExitStatus = true // server closes channel without sending exit-status
+
+	var out bytes.Buffer
+	_, err := c.ConnectMainProcess(context.Background(), "default", "sb", false,
+		NopTerminal{In: strings.NewReader(""), Out: &out, Err: &bytes.Buffer{}})
+	if err == nil {
+		t.Fatal("ConnectMainProcess must return an error when no exit-status was received")
+	}
+	if !errors.Is(err, ErrNoExitStatus) {
+		t.Errorf("error should be ErrNoExitStatus, got: %v", err)
+	}
+}
+
+func TestConnectMainProcess_GatewayError(t *testing.T) {
+	c := &client{gw: tunnelErrGateway{}}
+	_, err := c.ConnectMainProcess(context.Background(), "default", "sb", false,
+		NopTerminal{In: strings.NewReader(""), Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
+	if err == nil || !strings.Contains(err.Error(), "tunnel refused") {
+		t.Errorf("ConnectMainProcess tunnel err = %v, want tunnel refused", err)
+	}
+}
+
 func TestConnect_KeepaliveRejectionDoesNotTimeout(t *testing.T) {
 	c, gw := newTestClient(t, t.TempDir(), t.TempDir())
 	gw.mainHold = true

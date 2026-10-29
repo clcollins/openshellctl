@@ -44,15 +44,6 @@ func NormalizeProviderType(s string) (string, bool) {
 	return canon, ok
 }
 
-// DetectProviderFromCommand infers a provider type from the basename of
-// command[0] (detect_provider_from_command).
-func DetectProviderFromCommand(cmd []string) (string, bool) {
-	if len(cmd) == 0 {
-		return "", false
-	}
-	return NormalizeProviderType(baseName(cmd[0]))
-}
-
 // ProviderResolution is the outcome of resolving requested/inferred providers.
 type ProviderResolution struct {
 	Names        []string // existing provider names to attach

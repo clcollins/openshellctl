@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,8 +11,11 @@ import (
 
 	types "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
 	"github.com/spf13/cobra"
+	"go.uber.org/mock/gomock"
 
 	"github.com/openshift-online/openshellctl/pkg/api/v1alpha1"
+	"github.com/openshift-online/openshellctl/pkg/gateway/mock"
+	"github.com/openshift-online/openshellctl/pkg/sandbox"
 )
 
 func TestLoadManifest_FileAndStdin(t *testing.T) {
@@ -583,5 +587,124 @@ func TestBuildCreateFlags_NoPolicy(t *testing.T) {
 	}
 	if f.Policy != nil {
 		t.Errorf("policy should be nil when no flag and no env: %+v", f.Policy)
+	}
+}
+
+// TestShouldAttachAfterCreate verifies the pure attach-predicate covers all
+// combinations of Detach, Output, Keep, and TTY state. This is the single
+// source of truth for both AwaitMainProcessAttachment and the post-create
+// "skip attach" guard; they must not drift.
+func TestShouldAttachAfterCreate(t *testing.T) {
+	table := []struct {
+		name                string
+		detach, keep        bool
+		output              string
+		stdinTTY, stdoutTTY bool
+		want                bool
+	}{
+		{"interactive no-keep", false, false, "table", true, true, true},
+		{"interactive keep both-tty", false, true, "table", true, true, true},
+		{"interactive keep no-stdin-tty", false, true, "table", false, true, false},
+		{"interactive keep no-stdout-tty", false, true, "table", true, false, false},
+		{"interactive keep no-tty", false, true, "table", false, false, false},
+		{"detach", true, false, "table", true, true, false},
+		{"json output", false, false, "json", true, true, false},
+		{"yaml output", false, true, "yaml", false, false, false},
+	}
+	for _, tc := range table {
+		t.Run(tc.name, func(t *testing.T) {
+			req := &sandbox.CreateRequest{Detach: tc.detach, Keep: tc.keep, Output: tc.output}
+			if got := shouldAttachAfterCreate(req, tc.stdinTTY, tc.stdoutTTY); got != tc.want {
+				t.Errorf("shouldAttachAfterCreate = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+// TestBuildCreateFlags_ApprovalModeDefault_DoesNotOverrideManifest verifies
+// that the cobra default "manual" for --approval-mode is NOT propagated when
+// the user did not explicitly pass the flag. Without this check, the flag's
+// default silently overwrites a manifest's approval-mode via
+// MergeManifestAndFlags's "flag non-empty wins" rule.
+func TestBuildCreateFlags_ApprovalModeDefault_DoesNotOverrideManifest(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("approval-mode", "manual", "")
+	// Flag registered but NOT set — simulates cobra after parsing with no
+	// --approval-mode argument. cmd.Flags().Changed("approval-mode") == false.
+
+	f, err := buildCreateFlags(cmd, createFlagInput{approvalMode: "manual"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.ApprovalMode != "" {
+		t.Errorf("ApprovalMode = %q, want empty when flag not explicitly set", f.ApprovalMode)
+	}
+}
+
+// TestBuildCreateFlags_ApprovalModeExplicit verifies that an explicit
+// --approval-mode flag value IS propagated, so it wins over a manifest.
+func TestBuildCreateFlags_ApprovalModeExplicit(t *testing.T) {
+	cmd := &cobra.Command{}
+	cmd.Flags().String("approval-mode", "manual", "")
+	// Simulate the user passing --approval-mode=auto.
+	if err := cmd.Flags().Set("approval-mode", "auto"); err != nil {
+		t.Fatal(err)
+	}
+
+	f, err := buildCreateFlags(cmd, createFlagInput{approvalMode: "auto"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.ApprovalMode != "auto" {
+		t.Errorf("ApprovalMode = %q, want %q when flag explicitly set", f.ApprovalMode, "auto")
+	}
+}
+
+// TestDeleteIfAwaiting_Noop verifies that deleteIfAwaiting is a no-op when
+// AwaitMainProcessAttachment is false — no delete RPC is issued.
+func TestDeleteIfAwaiting_Noop(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	// No DeleteSandbox expectation — gomock will fail the test if it's called.
+
+	req := &sandbox.CreateRequest{AwaitMainProcessAttachment: false}
+	var stderr bytes.Buffer
+	deleteIfAwaiting(gw, "default", "sb", req, &stderr)
+	if stderr.Len() != 0 {
+		t.Errorf("expected no stderr output, got: %q", stderr.String())
+	}
+}
+
+// TestDeleteIfAwaiting_DeleteSuccess verifies that deleteIfAwaiting calls
+// DeleteSandbox when AwaitMainProcessAttachment is true and emits no warning.
+func TestDeleteIfAwaiting_DeleteSuccess(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().DeleteSandbox(gomock.Any(), "default", "sb").Return(true, nil)
+
+	req := &sandbox.CreateRequest{AwaitMainProcessAttachment: true}
+	var stderr bytes.Buffer
+	deleteIfAwaiting(gw, "default", "sb", req, &stderr)
+	if stderr.Len() != 0 {
+		t.Errorf("expected no stderr output on success, got: %q", stderr.String())
+	}
+}
+
+// TestDeleteIfAwaiting_DeleteError verifies that deleteIfAwaiting logs a
+// warning to stderr when DeleteSandbox returns an error, rather than
+// propagating the error.
+func TestDeleteIfAwaiting_DeleteError(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().DeleteSandbox(gomock.Any(), "default", "sb").Return(false, fmt.Errorf("rpc failure"))
+
+	req := &sandbox.CreateRequest{AwaitMainProcessAttachment: true}
+	var stderr bytes.Buffer
+	deleteIfAwaiting(gw, "default", "sb", req, &stderr)
+	if !strings.Contains(stderr.String(), "Warning") {
+		t.Errorf("expected warning in stderr, got: %q", stderr.String())
+	}
+	if !strings.Contains(stderr.String(), "rpc failure") {
+		t.Errorf("expected error text in stderr, got: %q", stderr.String())
 	}
 }

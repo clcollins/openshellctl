@@ -12,6 +12,13 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
+// ErrNoExitStatus is returned by ConnectMainProcess when the SSH channel closes
+// without delivering an exit-status request. The remote process may have been
+// killed by a signal or the gateway may have lost contact with it. Callers
+// that need to distinguish this from a transport-level dial failure can use
+// errors.Is against this sentinel.
+var ErrNoExitStatus = errors.New("ssh channel closed without exit-status: remote process may have been killed")
+
 // detach chord bytes: Ctrl-P (0x10) then Ctrl-Q (0x11).
 const (
 	ctrlP = 0x10
@@ -58,6 +65,20 @@ type (
 	winchMsg      struct{ Columns, Rows, Width, Height uint32 }
 	execMsg       struct{ Command string }
 )
+
+type subsystemMsg struct{ Subsystem string }
+
+// sendSubsystemRequest sends an SSH subsystem request on the channel.
+func sendSubsystemRequest(ch ssh.Channel, subsystem string) error {
+	ok, err := ch.SendRequest("subsystem", true, ssh.Marshal(&subsystemMsg{Subsystem: subsystem}))
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("server rejected subsystem %q request", subsystem)
+	}
+	return nil
+}
 
 // sendSessionRequest sends either an exec request (when command is non-empty)
 // or a shell request (when command is empty) on the SSH channel. Exec sends the
@@ -238,6 +259,133 @@ func termSize(term Terminal) (cols, rows int) {
 		rows = 24
 	}
 	return cols, rows
+}
+
+// ConnectMainProcess attaches to the sandbox's main process via the SSH subsystem
+// "openshell-main". This is the correct attach path for 0.1.x gateways: using a
+// shell request starts a new login shell, and using exec re-runs the command
+// (double-executing spec.command). The subsystem request targets the process the
+// gateway already launched at boot from OPENSHELL_MAIN_PROCESS_SPEC.
+func (c *client) ConnectMainProcess(ctx context.Context, workspace, sandbox string, tty bool, term Terminal) (int, error) {
+	cli, err := c.dialSSH(ctx, workspace, sandbox)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = cli.Close() }()
+
+	ch, reqs, err := cli.OpenChannel("session", nil)
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = ch.Close() }()
+
+	exitCode := 0
+	exitSet := false
+	reqsDone := make(chan struct{})
+	go func() {
+		defer close(reqsDone)
+		for req := range reqs {
+			if req.Type == "exit-status" && len(req.Payload) >= 4 {
+				exitCode = int(binary.BigEndian.Uint32(req.Payload))
+				exitSet = true
+			}
+			if req.WantReply {
+				_ = req.Reply(false, nil)
+			}
+		}
+	}()
+
+	keepaliveDead := make(chan struct{})
+	if c.clock != nil {
+		tickCh, tickStop := c.clock.NewTicker(time.Duration(keepaliveInterval) * time.Second)
+		go func() {
+			defer tickStop()
+			failures := 0
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case _, ok := <-tickCh:
+					if !ok {
+						return
+					}
+					_, _, err := cli.SendRequest("keepalive@openssh.com", true, nil)
+					if err != nil {
+						failures++
+						if failures >= keepaliveMaxCount {
+							close(keepaliveDead)
+							_ = cli.Close()
+							return
+						}
+					} else {
+						failures = 0
+					}
+				}
+			}
+		}()
+	}
+
+	if tty {
+		cols, rows := termSize(term)
+		payload := ssh.Marshal(&ptyRequestMsg{Term: "xterm-256color", Columns: uint32(cols), Rows: uint32(rows)}) //nolint:gosec // terminal dimensions are small non-negative values
+		if _, err := ch.SendRequest("pty-req", true, payload); err != nil {
+			return 0, err
+		}
+		if restore, ok := term.MakeRaw(); ok {
+			defer restore()
+		}
+		if rc, stop := term.Resizes(); rc != nil {
+			defer stop()
+			go func() {
+				for range rc {
+					cols, rows := termSize(term)
+					_, _ = ch.SendRequest("window-change", false, ssh.Marshal(&winchMsg{Columns: uint32(cols), Rows: uint32(rows)})) //nolint:gosec // small non-negative dimensions
+				}
+			}()
+		}
+	}
+
+	_, _ = ch.SendRequest("env", false, ssh.Marshal(&setenvRequest{Name: "TERM", Value: "xterm-256color"}))
+
+	if err := sendSubsystemRequest(ch, "openshell-main"); err != nil {
+		return 0, err
+	}
+
+	outDone := make(chan struct{})
+	go func() {
+		_, _ = io.Copy(term.Stdout(), ch)
+		close(outDone)
+	}()
+	go func() { _, _ = io.Copy(term.Stderr(), ch.Stderr()) }()
+
+	detachCh := make(chan struct{}, 1)
+	go func() {
+		if pumpDetach(term.Stdin(), ch) {
+			detachCh <- struct{}{}
+			_ = ch.Close()
+			return
+		}
+		_ = ch.CloseWrite()
+	}()
+
+	select {
+	case <-ctx.Done():
+		return 0, ctx.Err()
+	case <-keepaliveDead:
+		return 0, fmt.Errorf("ssh keepalive timeout: %d consecutive failures", keepaliveMaxCount)
+	case <-detachCh:
+		return 0, nil
+	case <-outDone:
+		<-reqsDone
+		if exitSet {
+			return exitCode, nil
+		}
+		// No exit-status received: the main process was likely killed by a signal
+		// or the gateway lost contact with it. Return a sentinel so callers (crons
+		// in particular) do not record the session as successful.  The returned
+		// code is unspecified when ErrNoExitStatus is non-nil.
+		return 0, ErrNoExitStatus
+	}
 }
 
 // pumpDetach copies src→dst, returning true if the Ctrl-P Ctrl-Q chord was seen
