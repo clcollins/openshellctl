@@ -3,7 +3,7 @@ module github.com/openshift-online/openshellctl
 go 1.26.0
 
 require (
-	github.com/NVIDIA/OpenShell/sdk/go v0.0.0-20261009050449-e1f3c82caa3e
+	github.com/NVIDIA/OpenShell/sdk/go v0.0.0-20261020123705-bdb956f2cd65
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/sabhiram/go-gitignore v0.0.0-20210923224102-525f6e181f06
 	github.com/spf13/cobra v1.10.2
