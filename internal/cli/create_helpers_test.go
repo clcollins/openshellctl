@@ -596,11 +596,11 @@ func TestBuildCreateFlags_NoPolicy(t *testing.T) {
 // "skip attach" guard; they must not drift.
 func TestShouldAttachAfterCreate(t *testing.T) {
 	table := []struct {
-		name                  string
-		detach, keep          bool
-		output                string
-		stdinTTY, stdoutTTY   bool
-		want                  bool
+		name                string
+		detach, keep        bool
+		output              string
+		stdinTTY, stdoutTTY bool
+		want                bool
 	}{
 		{"interactive no-keep", false, false, "table", true, true, true},
 		{"interactive keep both-tty", false, true, "table", true, true, true},

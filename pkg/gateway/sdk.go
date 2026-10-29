@@ -44,7 +44,7 @@ func (c *client) GetSandbox(ctx context.Context, workspace, name string) (*types
 func (c *client) CreateSandbox(ctx context.Context, workspace, name string, spec *types.SandboxSpec, labels map[string]string) (*types.Sandbox, error) {
 	var out *types.Sandbox
 	err := withAuthRetry(ctx, c.auth, func(ctx context.Context) error {
-		s, err := c.sdk().Sandboxes().Create(ctx, workspace, name, spec, labels)
+		s, err := c.sdk().Sandboxes().Create(ctx, workspace, name, spec, v1.WithLabels(labels))
 		if err != nil {
 			return Classify(err, "sandbox", name)
 		}
