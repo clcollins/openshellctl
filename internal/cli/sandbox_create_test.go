@@ -1,14 +1,19 @@
 package cli
 
 import (
+	"context"
+	"errors"
+	"io"
 	"strings"
 	"testing"
 
 	types "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
+	pb "github.com/NVIDIA/OpenShell/sdk/go/proto/openshellv1"
 	"go.uber.org/mock/gomock"
 
 	"github.com/openshift-online/openshellctl/pkg/gateway"
 	"github.com/openshift-online/openshellctl/pkg/gateway/mock"
+	"github.com/openshift-online/openshellctl/pkg/transfer"
 )
 
 // TestSandboxCreate_Replace runs `sandbox create --replace` end to end
@@ -96,4 +101,68 @@ func TestSandboxCreate_ReplaceTimeoutFlag_Registered(t *testing.T) {
 	if exitCodeFor(err) != ExitUsage {
 		t.Errorf("exit = %d, want ExitUsage (2, cobra flag parse errors map to usage)", exitCodeFor(err))
 	}
+}
+
+// TestSandboxCreate_NoKeep_AttachTransportLoss_DeletesSandbox proves that
+// --no-keep causes an explicit DeleteSandbox RPC when ConnectMainProcess
+// returns *transfer.AttachClosedError (transport loss, no exit-status).
+// The gateway's ephemeral cleanup hook does not fire on a transport loss, so
+// the CLI must delete explicitly.
+func TestSandboxCreate_NoKeep_AttachTransportLoss_DeletesSandbox(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+
+	gomock.InOrder(
+		// (4) raw create (AwaitMainProcessAttachment + RetentionEphemeral require raw proto path)
+		gw.EXPECT().CreateSandboxRaw(gomock.Any(), gomock.Any()).
+			Return(&pb.Sandbox{}, nil),
+		// (7) watch to Ready; initial phase is UNSPECIFIED so sawNonReady=true;
+		// stream returns one READY event which immediately satisfies the watch.
+		gw.EXPECT().WatchSandbox(gomock.Any(), gomock.Any()).
+			Return(&sandboxPhaseStream{phase: pb.SandboxPhase_SANDBOX_PHASE_READY}, nil),
+		// GetSandbox to refresh the sandbox after the watch (error ignored by caller).
+		gw.EXPECT().GetSandbox(gomock.Any(), "default", gomock.Any()).
+			Return(&types.Sandbox{}, nil),
+		// DeleteSandbox must be called exactly once on transport loss.
+		gw.EXPECT().DeleteSandbox(gomock.Any(), "default", gomock.Any()).
+			Return(true, nil),
+	)
+
+	stub := &stubTransferClient{connectErr: &transfer.AttachClosedError{}}
+	_, err := runCmdWithGateway(t, cliDeps{Gateway: gw, Transfer: stub},
+		"sandbox", "create", "--name", "sb-t", "--from", "python", "--no-keep")
+	var ace *transfer.AttachClosedError
+	if !errors.As(err, &ace) {
+		t.Errorf("expected *transfer.AttachClosedError, got %v", err)
+	}
+}
+
+// sandboxPhaseStream is a gateway.Stream[*pb.SandboxStreamEvent] that returns
+// one sandbox-phase event then EOF.
+type sandboxPhaseStream struct {
+	phase pb.SandboxPhase
+	done  bool
+}
+
+func (s *sandboxPhaseStream) Recv() (*pb.SandboxStreamEvent, error) {
+	if s.done {
+		return nil, io.EOF
+	}
+	s.done = true
+	return &pb.SandboxStreamEvent{Payload: &pb.SandboxStreamEvent_Sandbox{
+		Sandbox: &pb.Sandbox{Status: &pb.SandboxStatus{Phase: s.phase}},
+	}}, nil
+}
+func (s *sandboxPhaseStream) Close() {}
+
+// stubTransferClient implements transfer.Client with ConnectMainProcess
+// returning a fixed error; all other methods delegate to nil (unreachable in
+// this test).
+type stubTransferClient struct {
+	transfer.Client
+	connectErr error
+}
+
+func (s *stubTransferClient) ConnectMainProcess(_ context.Context, _, _ string, _ bool, _ transfer.Terminal) (int, error) {
+	return 0, s.connectErr
 }

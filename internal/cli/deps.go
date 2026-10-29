@@ -6,6 +6,7 @@ import (
 	"github.com/openshift-online/openshellctl/pkg/auth"
 	"github.com/openshift-online/openshellctl/pkg/gateway"
 	"github.com/openshift-online/openshellctl/pkg/gatewayconfig"
+	"github.com/openshift-online/openshellctl/pkg/transfer"
 )
 
 // cliDeps holds test-injected replacements for the gateway connection and
@@ -24,6 +25,7 @@ type cliDeps struct {
 	Gateway     gateway.Gateway
 	Target      *gatewayconfig.Target
 	TokenSource auth.TokenSource
+	Transfer    transfer.Client
 }
 
 // depsCtxKey is the unexported context key type under which a cliDeps is

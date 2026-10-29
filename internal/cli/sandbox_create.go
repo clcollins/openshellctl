@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -203,6 +202,9 @@ func newSandboxCreateCommand() *cobra.Command {
 				// Attach via connect.
 				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Attaching to sandbox %s...\n", sb.Name)
 				tc := transfer.New(gw, nil, wallClock{})
+				if d, ok := depsFrom(cmd.Context()); ok && d.Transfer != nil {
+					tc = d.Transfer
+				}
 				useTTY := stdinTTY && stdoutTTY
 				t := &cliTerminal{
 					stdinFd:  int(os.Stdin.Fd()),
@@ -215,15 +217,20 @@ func newSandboxCreateCommand() *cobra.Command {
 				code, cerr := tc.ConnectMainProcess(cmd.Context(), ws, sb.Name, useTTY, t)
 
 				if !req.Keep {
-					// RetentionEphemeral: the gateway already cleaned up the sandbox
-					// when the main process exited; skip the explicit delete to avoid a
-					// spurious NotFound error/warning.
+					// RetentionEphemeral: the gateway cleans up the sandbox when the
+					// main process exits normally (exit-status delivered). Skip the
+					// explicit delete to avoid a spurious NotFound error.
 					//
-					// Exception: if ConnectMainProcess itself failed with a transport-level
-					// error (SSH dial error etc.), the main process may never have started
-					// so ephemeral cleanup won't fire. ErrNoExitStatus is NOT a transport
-					// error — the session completed; the gateway fired ephemeral cleanup.
-					isTransportErr := cerr != nil && !errors.Is(cerr, transfer.ErrNoExitStatus)
+					// Exception: any non-nil error from ConnectMainProcess means the
+					// gateway did NOT fire ephemeral cleanup:
+					//   - *transfer.AttachClosedError — SSH channel closed without
+					//     exit-status; per the supervisor contract (ssh.rs:1391-1427),
+					//     every supervisor-initiated close sends exit-status, so its
+					//     absence means the transport died while the main process may
+					//     still be running. Gateway-side cleanup does not fire.
+					//   - Other errors — SSH dial failure, context cancel, etc.; the
+					//     main process may never have started.
+					isTransportErr := cerr != nil
 					if !req.RetentionEphemeral || isTransportErr {
 						if _, derr := gw.DeleteSandbox(context.Background(), ws, sb.Name); derr != nil {
 							_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "Failed to delete sandbox %s: %v\n", sb.Name, derr)

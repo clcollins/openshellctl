@@ -12,18 +12,46 @@ import (
 	"golang.org/x/crypto/ssh"
 )
 
-// ErrNoExitStatus is returned by ConnectMainProcess when the SSH channel closes
-// without delivering an exit-status request. The remote process may have been
-// killed by a signal or the gateway may have lost contact with it. Callers
-// that need to distinguish this from a transport-level dial failure can use
-// errors.Is against this sentinel.
-var ErrNoExitStatus = errors.New("ssh channel closed without exit-status: remote process may have been killed")
+// ErrNoExitStatus is the sentinel matched by errors.Is for AttachClosedError.
+// Per the supervisor contract (ssh.rs:1391-1427), every supervisor-initiated
+// channel close carries an exit-status request; absence therefore means the
+// transport underneath the SSH channel was lost while the main process may
+// still be running. Gateway-side ephemeral cleanup does not fire in this case.
+var ErrNoExitStatus = errors.New("ssh channel closed without exit-status")
+
+// AttachClosedError is returned by ConnectMainProcess when the SSH channel
+// closed without delivering an exit-status request. Tunnel holds the first
+// error the gateway tunnel reported (if any), enabling callers to distinguish
+// a killed process from a broken network path.
+type AttachClosedError struct {
+	Tunnel error
+}
+
+func (e *AttachClosedError) Error() string {
+	if e.Tunnel != nil {
+		return "ssh channel closed without exit-status; tunnel: " + e.Tunnel.Error()
+	}
+	return "ssh channel closed without exit-status"
+}
+
+// Is makes errors.Is(e, ErrNoExitStatus) return true so existing callers that
+// check for ErrNoExitStatus continue to work without changes.
+func (e *AttachClosedError) Is(target error) bool { return target == ErrNoExitStatus }
+
+// Unwrap exposes the tunnel error for errors.Is/errors.As traversal.
+func (e *AttachClosedError) Unwrap() error { return e.Tunnel }
 
 // detach chord bytes: Ctrl-P (0x10) then Ctrl-Q (0x11).
 const (
 	ctrlP = 0x10
 	ctrlQ = 0x11
 )
+
+// stdinChunkSize bounds one local read from stdin. The SSH layer turns every
+// Write into one CHANNEL_DATA packet, so this controls the maximum packet
+// size and the gateway gRPC frame size. 32 KiB matches OpenSSH's send_data
+// buffer and is cited in the README and in TestPumpDetach_CoalescesWrites.
+const stdinChunkSize = 32 * 1024
 
 // SSH keepalive constants matching the Rust CLI's ServerAliveInterval /
 // ServerAliveCountMax (emitted in ssh-config).
@@ -117,7 +145,7 @@ func sendSessionRequest(ch ssh.Channel, command []string) error {
 // handler runs the specified command. We drive a raw session channel (rather
 // than ssh.Session) so the exit status is directly observable.
 func (c *client) Connect(ctx context.Context, workspace, sandbox string, tty bool, term Terminal, command ...string) (int, error) {
-	cli, err := c.dialSSH(ctx, workspace, sandbox)
+	cli, _, err := c.dialSSH(ctx, workspace, sandbox)
 	if err != nil {
 		return 0, err
 	}
@@ -267,7 +295,7 @@ func termSize(term Terminal) (cols, rows int) {
 // (double-executing spec.command). The subsystem request targets the process the
 // gateway already launched at boot from OPENSHELL_MAIN_PROCESS_SPEC.
 func (c *client) ConnectMainProcess(ctx context.Context, workspace, sandbox string, tty bool, term Terminal) (int, error) {
-	cli, err := c.dialSSH(ctx, workspace, sandbox)
+	cli, tc, err := c.dialSSH(ctx, workspace, sandbox)
 	if err != nil {
 		return 0, err
 	}
@@ -377,47 +405,76 @@ func (c *client) ConnectMainProcess(ctx context.Context, workspace, sandbox stri
 		return 0, nil
 	case <-outDone:
 		<-reqsDone
-		if exitSet {
-			return exitCode, nil
-		}
-		// No exit-status received: the main process was likely killed by a signal
-		// or the gateway lost contact with it. Return a sentinel so callers (crons
-		// in particular) do not record the session as successful.  The returned
-		// code is unspecified when ErrNoExitStatus is non-nil.
-		return 0, ErrNoExitStatus
+		return outDoneResult(exitSet, exitCode, keepaliveDead, tc.firstErr())
 	}
 }
 
+// outDoneResult decides what to return when the main process output stream ends.
+// exitSet is checked first: a delivered exit-status is authoritative regardless
+// of keepalive state (the keepalive goroutine may accumulate failures while the
+// process is exiting normally, so checking keepaliveDead first would mask the
+// real exit code). When no exit-status was delivered, keepaliveDead is checked
+// next: the keepalive goroutine closes it before calling cli.Close() which
+// causes outDone, making the keepalive timeout the more specific diagnosis.
+func outDoneResult(exitSet bool, exitCode int, keepaliveDead <-chan struct{}, tunnelErr error) (int, error) {
+	if exitSet {
+		return exitCode, nil
+	}
+	select {
+	case <-keepaliveDead:
+		return 0, fmt.Errorf("ssh keepalive timeout: %d consecutive failures", keepaliveMaxCount)
+	default:
+	}
+	return 0, &AttachClosedError{Tunnel: tunnelErr}
+}
+
+// filterDetach processes one chunk of input data against the Ctrl-P Ctrl-Q
+// detach chord state machine. pending tracks whether a Ctrl-P was seen at the
+// end of the previous chunk. Returns the bytes to forward and detach=true when
+// the full chord is detected. The Ctrl-P byte is never forwarded when followed
+// by Ctrl-Q; consecutive Ctrl-P causes one to be forwarded.
+func filterDetach(data []byte, pending *bool) (forward []byte, detach bool) {
+	out := make([]byte, 0, len(data))
+	for _, b := range data {
+		switch {
+		case *pending && b == ctrlQ:
+			*pending = false
+			return out, true
+		case *pending && b == ctrlP:
+			out = append(out, ctrlP)
+			// *pending stays true
+		case *pending:
+			out = append(out, ctrlP, b)
+			*pending = false
+		case b == ctrlP:
+			*pending = true
+		default:
+			out = append(out, b)
+		}
+	}
+	return out, false
+}
+
 // pumpDetach copies src→dst, returning true if the Ctrl-P Ctrl-Q chord was seen
-// (the chord bytes are not forwarded). Byte-at-a-time is acceptable for
-// interactive input volumes.
+// (the chord bytes are not forwarded). Each Read produces at most one Write: the
+// SSH layer turns every Write into one CHANNEL_DATA packet, which the gateway
+// relay turns into one gRPC frame. Coalescing to 32 KiB per Read matches the
+// behaviour of OpenSSH's ssh(1) and avoids queue pressure in the supervisor's
+// 64-slot mpsc input channel on large pastes.
 func pumpDetach(src io.Reader, dst io.Writer) bool {
-	buf := make([]byte, 1)
-	sawCtrlP := false
+	buf := make([]byte, stdinChunkSize)
+	var pending bool
 	for {
 		n, err := src.Read(buf)
 		if n > 0 {
-			b := buf[0]
-			switch {
-			case sawCtrlP && b == ctrlQ:
+			fwd, detach := filterDetach(buf[:n], &pending)
+			if len(fwd) > 0 {
+				if _, werr := dst.Write(fwd); werr != nil {
+					return false
+				}
+			}
+			if detach {
 				return true
-			case sawCtrlP && b == ctrlP:
-				// consecutive Ctrl-P: forward one, keep armed.
-				if _, werr := dst.Write([]byte{ctrlP}); werr != nil {
-					return false
-				}
-			case sawCtrlP:
-				// Ctrl-P not followed by Ctrl-Q: forward the held Ctrl-P then this byte.
-				if _, werr := dst.Write([]byte{ctrlP, b}); werr != nil {
-					return false
-				}
-				sawCtrlP = false
-			case b == ctrlP:
-				sawCtrlP = true
-			default:
-				if _, werr := dst.Write([]byte{b}); werr != nil {
-					return false
-				}
 			}
 		}
 		if err != nil {

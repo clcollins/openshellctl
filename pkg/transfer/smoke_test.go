@@ -459,6 +459,32 @@ func TestConnectMainProcess_NoExitStatus_ReturnsError(t *testing.T) {
 	}
 }
 
+var errSyntheticDrop = errors.New("synthetic transport drop")
+
+// TestConnectMainProcess_TransportLoss_ReportsTunnelError verifies that when the
+// SSH channel closes without exit-status AND the underlying tunnel recorded an
+// error, ConnectMainProcess returns an *AttachClosedError whose Tunnel field
+// wraps that error — so callers can distinguish a killed process from a broken
+// network path.
+func TestConnectMainProcess_TransportLoss_ReportsTunnelError(t *testing.T) {
+	c, gw := newTestClient(t, t.TempDir(), t.TempDir())
+	gw.mainReply = "some output\n"
+	gw.dropAfterMainReply = true    // close raw conn after mainReply → transport dies mid-session
+	gw.tunnelErr = errSyntheticDrop // EOF from closed conn becomes this sentinel
+
+	_, err := c.ConnectMainProcess(context.Background(), "default", "sb", false,
+		NopTerminal{In: strings.NewReader(""), Out: &bytes.Buffer{}, Err: &bytes.Buffer{}})
+	if err == nil {
+		t.Fatal("expected error, got nil")
+	}
+	if !errors.Is(err, ErrNoExitStatus) {
+		t.Errorf("errors.Is(err, ErrNoExitStatus) = false, got: %v", err)
+	}
+	if !errors.Is(err, errSyntheticDrop) {
+		t.Errorf("errors.Is(err, errSyntheticDrop) = false, got: %v", err)
+	}
+}
+
 func TestConnectMainProcess_GatewayError(t *testing.T) {
 	c := &client{gw: tunnelErrGateway{}}
 	_, err := c.ConnectMainProcess(context.Background(), "default", "sb", false,

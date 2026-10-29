@@ -79,7 +79,38 @@ func (t *cliTerminal) MakeRaw() (func(), bool) {
 	if err != nil {
 		return func() {}, false
 	}
-	return func() { _ = term.Restore(t.stdinFd, state) }, true
+	restore := func() { _ = term.Restore(t.stdinFd, state) }
+	return func() { restoreWith(restore, t.stdout, t.isTTY) }, true
+}
+
+// terminalResetSequence returns ANSI/VT100 escape sequences that restore a
+// VTE/xterm-family terminal to a clean state after an interactive attach ends.
+// Deliberately sent even after a clean exit (every sequence is idempotent) to
+// undo any modes the remote program enabled: mouse reporting, focus events,
+// bracketed paste, alternate screen, and hidden cursor.
+// This is an intentional difference from the Rust CLI and ssh(1), which do not
+// send a reset; see docs/deliberate-differences.md.
+func terminalResetSequence() []byte {
+	return []byte(
+		"\033[?1000l" + // disable X10 mouse button events
+			"\033[?1002l" + // disable button-event mouse tracking
+			"\033[?1003l" + // disable any-event mouse tracking
+			"\033[?1006l" + // disable SGR extended mouse encoding
+			"\033[?1004l" + // disable focus-in/focus-out reporting
+			"\033[?2004l" + // disable bracketed-paste mode
+			"\033[?1049l" + // leave alternate screen, restore saved cursor
+			"\033[?25h", //   show cursor
+	)
+}
+
+// restoreWith calls restoreTTY and, when isTTY is true, writes the terminal
+// reset sequence to out. Extracted from cliTerminal.MakeRaw so it can be
+// tested without a real TTY file descriptor.
+func restoreWith(restoreTTY func(), out io.Writer, isTTY bool) {
+	restoreTTY()
+	if isTTY {
+		_, _ = out.Write(terminalResetSequence())
+	}
 }
 
 func (t *cliTerminal) Size() (int, int) {

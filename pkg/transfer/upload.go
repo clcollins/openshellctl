@@ -60,7 +60,7 @@ func (c *client) Upload(ctx context.Context, workspace, sandbox, local, dest str
 // runUploadTar dials the sandbox and streams the tar into the extract command.
 // It is thin I/O glue over the gateway SSH tunnel and archive/tar.
 func (c *client) runUploadTar(ctx context.Context, workspace, sandbox, destDir string, entries []uploadEntry) error {
-	cli, err := c.dialSSH(ctx, workspace, sandbox)
+	cli, _, err := c.dialSSH(ctx, workspace, sandbox)
 	if err != nil {
 		return err
 	}

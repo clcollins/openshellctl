@@ -18,7 +18,7 @@ import (
 func (c *client) Download(ctx context.Context, workspace, sandbox, remote, dest string, report func(string)) error {
 	reportf(report, "Downloading sandbox:%s -> %s", remote, destOrDot(dest))
 
-	cli, err := c.dialSSH(ctx, workspace, sandbox)
+	cli, _, err := c.dialSSH(ctx, workspace, sandbox)
 	if err != nil {
 		return err
 	}

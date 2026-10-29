@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"net"
+	"sync"
 	"time"
 
 	"golang.org/x/crypto/ssh"
@@ -14,45 +15,82 @@ import (
 const sshDialTimeout = 30 * time.Second
 
 // dialSSH opens the sandbox SSH tunnel and completes the SSH handshake over it.
-// The returned client owns the underlying tunnel (Close tears both down).
+// It returns the SSH client, the underlying tunnelConn (whose firstErr method
+// yields the first transport error seen on the wire), and any error.
 //
 // No auth methods are configured: crypto/ssh attempts the "none" method first,
 // which the sandbox server accepts unconditionally
 // (crates/openshell-supervisor-process/src/ssh.rs:506-508).
-func (c *client) dialSSH(ctx context.Context, workspace, sandbox string) (*ssh.Client, error) {
+func (c *client) dialSSH(ctx context.Context, workspace, sandbox string) (*ssh.Client, *tunnelConn, error) {
 	rwc, err := c.gw.SSHTunnel(ctx, workspace, sandbox)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	tc := &tunnelConn{ReadWriteCloser: rwc}
 	cfg := &ssh.ClientConfig{
 		User:            "sandbox",
 		Auth:            nil,                         // "none" auth (attempted automatically)
 		HostKeyCallback: ssh.InsecureIgnoreHostKey(), //nolint:gosec // ephemeral per-sandbox host key; tunnel is authorised by the gateway session token (matches CLI StrictHostKeyChecking=no)
 		Timeout:         sshDialTimeout,
 	}
-	conn, chans, reqs, err := ssh.NewClientConn(rwcConn(rwc), "sandbox", cfg)
+	conn, chans, reqs, err := ssh.NewClientConn(tc, "sandbox", cfg)
 	if err != nil {
 		_ = rwc.Close()
-		return nil, fmt.Errorf("ssh handshake failed: %w", err)
+		return nil, nil, fmt.Errorf("ssh handshake failed: %w", err)
 	}
-	return ssh.NewClient(conn, chans, reqs), nil
+	return ssh.NewClient(conn, chans, reqs), tc, nil
 }
 
 // tunnelConn adapts an io.ReadWriteCloser (the gateway SSH tunnel) to net.Conn
-// as required by ssh.NewClientConn. The tunnel has no meaningful addresses; the
-// deadline methods are no-ops (the SSH handshake Timeout is enforced by the
+// as required by ssh.NewClientConn. It records the first Read or Write error so
+// callers can distinguish a clean channel close from a transport-level failure.
+// The deadline methods are no-ops (the SSH handshake Timeout is enforced by the
 // ClientConfig, and RPC context cancellation tears the tunnel down).
 type tunnelConn struct {
 	io.ReadWriteCloser
+	mu  sync.Mutex // guards err; first non-nil write wins
+	err error
 }
 
+func (tc *tunnelConn) Read(p []byte) (int, error) {
+	n, err := tc.ReadWriteCloser.Read(p)
+	if err != nil {
+		tc.mu.Lock()
+		if tc.err == nil {
+			tc.err = err
+		}
+		tc.mu.Unlock()
+	}
+	return n, err
+}
+
+func (tc *tunnelConn) Write(p []byte) (int, error) {
+	n, err := tc.ReadWriteCloser.Write(p)
+	if err != nil {
+		tc.mu.Lock()
+		if tc.err == nil {
+			tc.err = err
+		}
+		tc.mu.Unlock()
+	}
+	return n, err
+}
+
+// firstErr returns the first transport error recorded by Read or Write, or nil.
+func (tc *tunnelConn) firstErr() error {
+	tc.mu.Lock()
+	defer tc.mu.Unlock()
+	return tc.err
+}
+
+// rwcConn wraps an io.ReadWriteCloser as a net.Conn; used by tests.
 func rwcConn(rwc io.ReadWriteCloser) net.Conn { return &tunnelConn{ReadWriteCloser: rwc} }
 
-func (tunnelConn) LocalAddr() net.Addr                { return tunnelAddr{} }
-func (tunnelConn) RemoteAddr() net.Addr               { return tunnelAddr{} }
-func (tunnelConn) SetDeadline(_ time.Time) error      { return nil }
-func (tunnelConn) SetReadDeadline(_ time.Time) error  { return nil }
-func (tunnelConn) SetWriteDeadline(_ time.Time) error { return nil }
+func (*tunnelConn) LocalAddr() net.Addr                { return tunnelAddr{} }
+func (*tunnelConn) RemoteAddr() net.Addr               { return tunnelAddr{} }
+func (*tunnelConn) SetDeadline(_ time.Time) error      { return nil }
+func (*tunnelConn) SetReadDeadline(_ time.Time) error  { return nil }
+func (*tunnelConn) SetWriteDeadline(_ time.Time) error { return nil }
 
 type tunnelAddr struct{}
 

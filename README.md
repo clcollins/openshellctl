@@ -708,6 +708,27 @@ openshellctl sandbox connect                   # uses last-used sandbox
 
 Detach from the session with **Ctrl-P Ctrl-Q** (the connection closes cleanly and exits 0).
 
+Large pastes are forwarded in up to 32 KiB chunks per read, so copying
+several kilobytes of text into the terminal does not stall the session.
+
+When the session ends (either by exit or detach), openshellctl sends ANSI
+escape sequences to disable mouse reporting, bracketed paste, alternate screen,
+and focus events, and to show the cursor. This is a deliberate difference from
+the upstream Rust CLI and `ssh`, which do not send a reset — see
+[`docs/deliberate-differences.md`](docs/deliberate-differences.md).
+
+If the session ends with:
+
+```
+ssh channel closed without exit-status; tunnel: <error>
+```
+
+the SSH channel closed before the remote main process sent an exit-status
+request. Per the supervisor contract, this means the network path between
+openshellctl and the gateway was lost — the main process may still be running.
+When `--no-keep` is set, openshellctl deletes the sandbox in this case, since
+the gateway's ephemeral cleanup hook does not fire on a transport loss.
+
 ### `sandbox upload`
 
 Upload files or directories to a sandbox.

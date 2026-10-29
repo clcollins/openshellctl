@@ -3,10 +3,13 @@ package transfer
 import (
 	"archive/tar"
 	"bytes"
+	"errors"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 )
 
@@ -393,6 +396,102 @@ func TestTrimPrefixSlash(t *testing.T) {
 	}
 }
 
+func TestFilterDetach(t *testing.T) {
+	cases := []struct {
+		name        string
+		pending     bool // initial pending state
+		data        []byte
+		want        []byte
+		detach      bool
+		wantPending bool // expected pending state after call
+	}{
+		{
+			name:        "plain bytes pass through",
+			data:        []byte("hello"),
+			want:        []byte("hello"),
+			wantPending: false,
+		},
+		{
+			name:        "chord in one chunk",
+			data:        []byte{ctrlP, ctrlQ},
+			want:        []byte{},
+			detach:      true,
+			wantPending: false,
+		},
+		{
+			name:        "bytes before chord forwarded, chord bytes dropped",
+			data:        []byte{'a', ctrlP, ctrlQ},
+			want:        []byte{'a'},
+			detach:      true,
+			wantPending: false,
+		},
+		{
+			name:        "chord split: first chunk ends with ctrl-p",
+			data:        []byte{'x', ctrlP},
+			want:        []byte{'x'},
+			detach:      false,
+			wantPending: true,
+		},
+		{
+			name:        "chord split: second chunk starts with ctrl-q",
+			pending:     true,
+			data:        []byte{ctrlQ, 'y'},
+			want:        []byte{},
+			detach:      true,
+			wantPending: false,
+		},
+		{
+			name:        "consecutive ctrl-p forwards one and stays armed",
+			data:        []byte{ctrlP, ctrlP},
+			want:        []byte{ctrlP},
+			detach:      false,
+			wantPending: true,
+		},
+		{
+			name:        "ctrl-p then non-chord byte forwards both",
+			pending:     true,
+			data:        []byte{'x'},
+			want:        []byte{ctrlP, 'x'},
+			detach:      false,
+			wantPending: false,
+		},
+		{
+			name:        "trailing ctrl-p held not forwarded",
+			data:        []byte{'a', ctrlP},
+			want:        []byte{'a'},
+			detach:      false,
+			wantPending: true,
+		},
+		{
+			name:        "empty input with pending keeps pending",
+			pending:     true,
+			data:        []byte{},
+			want:        []byte{},
+			detach:      false,
+			wantPending: true,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			pending := c.pending
+			got, detach := filterDetach(c.data, &pending)
+			if detach != c.detach {
+				t.Errorf("detach=%v, want %v", detach, c.detach)
+			}
+			if pending != c.wantPending {
+				t.Errorf("pending=%v, want %v", pending, c.wantPending)
+			}
+			want := c.want
+			if want == nil {
+				want = []byte{}
+			}
+			if !bytes.Equal(got, want) {
+				t.Errorf("forward=%v, want %v", got, want)
+			}
+		})
+	}
+}
+
 func TestPumpDetach(t *testing.T) {
 	t.Run("chord detaches without forwarding", func(t *testing.T) {
 		var dst bytes.Buffer
@@ -421,6 +520,206 @@ func TestPumpDetach(t *testing.T) {
 			t.Errorf("forwarded = %v, want single ctrl-p", dst.Bytes())
 		}
 	})
+}
+
+// countingWriter records how many Write calls it receives and the total bytes.
+type countingWriter struct {
+	buf    bytes.Buffer
+	writes int
+	total  int
+}
+
+func (w *countingWriter) Write(p []byte) (int, error) {
+	w.writes++
+	w.total += len(p)
+	return w.buf.Write(p)
+}
+
+func TestPumpDetach_CoalescesWrites(t *testing.T) {
+	// 12,070 non-control bytes fit in a single stdinChunkSize Read.
+	// bytes.Reader returns (n, nil) on the data read then (0, io.EOF) on the
+	// next read, and the EOF read produces no Write — so exactly 1 Write.
+	const size = 12070
+	data := bytes.Repeat([]byte{'a'}, size)
+	var wc countingWriter
+	pumpDetach(bytes.NewReader(data), &wc)
+	if wc.total != size {
+		t.Errorf("pumpDetach forwarded %d bytes, want %d", wc.total, size)
+	}
+	if wc.writes != 1 {
+		t.Errorf("pumpDetach made %d Write calls for %d bytes; want 1 (single 32 KiB read, no write on EOF read)", wc.writes, size)
+	}
+}
+
+// chunkedReader delivers data in exact slices, one per Read call.
+type chunkedReader struct {
+	chunks [][]byte
+	idx    int
+}
+
+func (r *chunkedReader) Read(p []byte) (int, error) {
+	if r.idx >= len(r.chunks) {
+		return 0, io.EOF
+	}
+	n := copy(p, r.chunks[r.idx])
+	r.idx++
+	return n, nil
+}
+
+func TestPumpDetach_ChordSplitAcrossReads(t *testing.T) {
+	// First chunk ends with Ctrl-P; second chunk starts with Ctrl-Q.
+	src := &chunkedReader{chunks: [][]byte{
+		{'d', 'a', 't', 'a', ctrlP},
+		{ctrlQ, 'x'},
+	}}
+	var dst bytes.Buffer
+	if !pumpDetach(src, &dst) {
+		t.Error("expected detach when chord split across two Read calls")
+	}
+	if !bytes.Equal(dst.Bytes(), []byte("data")) {
+		t.Errorf("forwarded = %v, want %q", dst.Bytes(), "data")
+	}
+}
+
+func TestAttachClosedError_IsErrNoExitStatus(t *testing.T) {
+	ace := &AttachClosedError{}
+	if !errors.Is(ace, ErrNoExitStatus) {
+		t.Errorf("errors.Is(&AttachClosedError{}, ErrNoExitStatus) = false, want true")
+	}
+}
+
+func TestAttachClosedError_UnwrapsTunnelError(t *testing.T) {
+	tunnelErr := errors.New("tunnel gone")
+	ace := &AttachClosedError{Tunnel: tunnelErr}
+	if !errors.Is(ace, tunnelErr) {
+		t.Errorf("errors.Is(&AttachClosedError{Tunnel: tunnelErr}, tunnelErr) = false, want true")
+	}
+}
+
+func TestAttachClosedError_ErrorText(t *testing.T) {
+	t.Run("without tunnel error", func(t *testing.T) {
+		got := (&AttachClosedError{}).Error()
+		want := "ssh channel closed without exit-status"
+		if got != want {
+			t.Errorf("Error() = %q, want %q", got, want)
+		}
+	})
+	t.Run("with tunnel error", func(t *testing.T) {
+		got := (&AttachClosedError{Tunnel: errors.New("network lost")}).Error()
+		want := "ssh channel closed without exit-status; tunnel: network lost"
+		if got != want {
+			t.Errorf("Error() = %q, want %q", got, want)
+		}
+	})
+}
+
+func TestOutDoneResult_KeepaliveDeadFirst(t *testing.T) {
+	kd := make(chan struct{})
+	close(kd) // keepalive already dead — must take priority over exit-status absence
+	_, err := outDoneResult(false, 0, kd, nil)
+	if err == nil || !strings.Contains(err.Error(), "keepalive timeout") {
+		t.Errorf("expected keepalive timeout error, got %v", err)
+	}
+}
+
+func TestOutDoneResult_ExitSet(t *testing.T) {
+	kd := make(chan struct{}) // keepalive alive
+	code, err := outDoneResult(true, 42, kd, nil)
+	if code != 42 || err != nil {
+		t.Errorf("outDoneResult(exitSet=true, 42, ...) = (%d, %v), want (42, nil)", code, err)
+	}
+}
+
+func TestOutDoneResult_ExitSetWinsOverKeepaliveDead(t *testing.T) {
+	// Both exitSet=true AND keepaliveDead closed: a delivered exit-status is
+	// authoritative; the keepalive goroutine may have accumulated failures while
+	// the process was exiting normally. Exit code must win.
+	kd := make(chan struct{})
+	close(kd)
+	code, err := outDoneResult(true, 7, kd, nil)
+	if err != nil || code != 7 {
+		t.Errorf("outDoneResult(exitSet=true, 7, kd=closed, nil) = (%d, %v), want (7, nil)", code, err)
+	}
+}
+
+func TestOutDoneResult_NoExitStatus(t *testing.T) {
+	kd := make(chan struct{}) // keepalive alive
+	_, err := outDoneResult(false, 0, kd, nil)
+	if !errors.Is(err, ErrNoExitStatus) {
+		t.Errorf("outDoneResult(exitSet=false, ...) error %v should be ErrNoExitStatus", err)
+	}
+}
+
+// errRWC is a fake io.ReadWriteCloser that returns sentinel errors on demand.
+type errRWC struct {
+	readErr  error
+	writeErr error
+}
+
+func (e *errRWC) Read(_ []byte) (int, error)  { return 0, e.readErr }
+func (e *errRWC) Write(_ []byte) (int, error) { return 0, e.writeErr }
+func (e *errRWC) Close() error                { return nil }
+
+var (
+	errRead1  = errors.New("read error 1")
+	errRead2  = errors.New("read error 2")
+	errWrite1 = errors.New("write error 1")
+)
+
+func TestTunnelConn_RecordsFirstReadError(t *testing.T) {
+	tc := rwcConn(&errRWC{readErr: errRead1}).(*tunnelConn)
+	buf := make([]byte, 4)
+	tc.Read(buf) //nolint:errcheck
+	if tc.firstErr() != errRead1 {
+		t.Errorf("firstErr() = %v, want %v", tc.firstErr(), errRead1)
+	}
+}
+
+func TestTunnelConn_RecordsFirstWriteError(t *testing.T) {
+	tc := rwcConn(&errRWC{readErr: io.EOF, writeErr: errWrite1}).(*tunnelConn)
+	buf := []byte("hi")
+	tc.Write(buf) //nolint:errcheck
+	if tc.firstErr() != errWrite1 {
+		t.Errorf("firstErr() = %v, want %v", tc.firstErr(), errWrite1)
+	}
+}
+
+func TestTunnelConn_FirstErrorWins(t *testing.T) {
+	rwc := &errRWC{readErr: errRead1}
+	tc := rwcConn(rwc).(*tunnelConn)
+	buf := make([]byte, 4)
+	tc.Read(buf) //nolint:errcheck
+	// Swap to a different error; firstErr should still return the first.
+	rwc.readErr = errRead2
+	tc.Read(buf) //nolint:errcheck
+	if tc.firstErr() != errRead1 {
+		t.Errorf("firstErr() = %v, want first error %v", tc.firstErr(), errRead1)
+	}
+}
+
+func TestTunnelConn_ConcurrentSafe(t *testing.T) {
+	tc := rwcConn(&errRWC{readErr: errRead1, writeErr: errWrite1}).(*tunnelConn)
+	var wg sync.WaitGroup
+	buf := make([]byte, 4)
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		go func() { defer wg.Done(); tc.Read(buf) }()  //nolint:errcheck
+		go func() { defer wg.Done(); tc.Write(buf) }() //nolint:errcheck
+	}
+	wg.Wait()
+	// firstErr must be one of the two known errors (not nil, not a data race).
+	err := tc.firstErr()
+	if err != errRead1 && err != errWrite1 {
+		t.Errorf("unexpected firstErr() = %v", err)
+	}
+}
+
+func TestTunnelConn_NilBeforeAnyError(t *testing.T) {
+	// A fresh tunnelConn must return nil from firstErr() before any Read or Write.
+	tc := rwcConn(&errRWC{}).(*tunnelConn)
+	if got := tc.firstErr(); got != nil {
+		t.Errorf("firstErr() before any Read/Write = %v, want nil", got)
+	}
 }
 
 func TestWriteUploadArchive_FileDirSymlink(t *testing.T) {

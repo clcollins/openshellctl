@@ -10,6 +10,7 @@ import (
 	"github.com/openshift-online/openshellctl/pkg/gateway"
 	"github.com/openshift-online/openshellctl/pkg/gatewayconfig"
 	"github.com/openshift-online/openshellctl/pkg/sandbox"
+	"github.com/openshift-online/openshellctl/pkg/transfer"
 	"github.com/openshift-online/openshellctl/pkg/vaultconfig"
 )
 
@@ -80,6 +81,17 @@ func exitCodeFor(err error) int {
 	var checksFailed *doctor.ErrChecksFailed
 	if errors.As(err, &checksFailed) {
 		return checksFailed.ExitCode()
+	}
+
+	// SSH channel closed without exit-status (transport loss mid-attach) → 1.
+	// Checked before all gateway error buckets: AttachClosedError.Unwrap()
+	// exposes the tunnel error, and if that tunnel error is itself a gateway
+	// type (e.g. UnauthenticatedError on a future SSHTunnel that classifies
+	// errors), errors.As would otherwise reach through and misclassify
+	// transport loss as an auth or permission failure.
+	var attachClosed *transfer.AttachClosedError
+	if errors.As(err, &attachClosed) {
+		return ExitError
 	}
 
 	// Permission denied → 7 (authenticated, but not authorized). Checked
