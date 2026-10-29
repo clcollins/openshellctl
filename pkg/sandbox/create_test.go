@@ -350,6 +350,72 @@ func TestCreate_BareGPU_NoAwaitOrEphemeralFields(t *testing.T) {
 	}
 }
 
+// TestCreate_CountedGPUWithAwait_CarriesGPUCount verifies that a counted GPU
+// request (--gpu 2) combined with AwaitMainProcessAttachment routes through the
+// raw path and carries the GPU count in ResourceRequirements — not dropped.
+func TestCreate_CountedGPUWithAwait_CarriesGPUCount(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().CreateSandboxRaw(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, req *pb.CreateSandboxRequest) (*pb.Sandbox, error) {
+			if req.Spec.ResourceRequirements == nil || req.Spec.ResourceRequirements.Gpu == nil {
+				t.Errorf("GPU resource requirements missing on raw path: %+v", req.Spec)
+			} else if req.Spec.ResourceRequirements.Gpu.Count == nil {
+				t.Error("counted GPU should carry non-nil Count")
+			} else if got := *req.Spec.ResourceRequirements.Gpu.Count; got != 2 {
+				t.Errorf("GPU Count = %d, want 2", got)
+			}
+			if !req.AwaitMainProcessAttachment {
+				t.Error("AwaitMainProcessAttachment should be true")
+			}
+			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
+		})
+
+	cnt := uint32(2)
+	r := &CreateRequest{
+		Workspace:                  "default",
+		Name:                       "sb",
+		GPU:                        &v1alpha1.GPU{Count: &cnt},
+		AwaitMainProcessAttachment: true,
+	}
+	if _, err := Create(context.Background(), CreateDeps{GW: gw}, r, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestCreate_CountedGPUWithEphemeral_CarriesGPUCount verifies that a counted
+// GPU request (--gpu 2) combined with RetentionEphemeral routes through the raw
+// path and carries both the GPU count and the retention annotation.
+func TestCreate_CountedGPUWithEphemeral_CarriesGPUCount(t *testing.T) {
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().CreateSandboxRaw(gomock.Any(), gomock.Any()).
+		DoAndReturn(func(_ context.Context, req *pb.CreateSandboxRequest) (*pb.Sandbox, error) {
+			if req.Spec.ResourceRequirements == nil || req.Spec.ResourceRequirements.Gpu == nil {
+				t.Errorf("GPU resource requirements missing on raw path: %+v", req.Spec)
+			} else if req.Spec.ResourceRequirements.Gpu.Count == nil {
+				t.Error("counted GPU should carry non-nil Count")
+			} else if got := *req.Spec.ResourceRequirements.Gpu.Count; got != 2 {
+				t.Errorf("GPU Count = %d, want 2", got)
+			}
+			if got := req.Annotations["openshell.nvidia.com/retention"]; got != "ephemeral" {
+				t.Errorf("retention annotation = %q, want %q", got, "ephemeral")
+			}
+			return &pb.Sandbox{Metadata: &dm.ObjectMeta{Name: "sb"}, Status: &pb.SandboxStatus{Phase: pb.SandboxPhase_SANDBOX_PHASE_PROVISIONING}}, nil
+		})
+
+	cnt := uint32(2)
+	r := &CreateRequest{
+		Workspace:          "default",
+		Name:               "sb",
+		GPU:                &v1alpha1.GPU{Count: &cnt},
+		RetentionEphemeral: true,
+	}
+	if _, err := Create(context.Background(), CreateDeps{GW: gw}, r, false); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestCreate_Replace(t *testing.T) {
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)

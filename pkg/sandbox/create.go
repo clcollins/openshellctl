@@ -130,9 +130,10 @@ func createSandbox(ctx context.Context, gw gateway.Gateway, r *CreateRequest, tt
 	return gw.CreateSandbox(ctx, r.Workspace, r.Name, spec, r.Labels)
 }
 
-// createSandboxRaw builds a raw CreateSandboxRequest for the bare --gpu case
-// (ResourceRequirements{Gpu:{Count:nil}}), then converts the returned proto to
-// a types.Sandbox shell carrying id/name/phase for the caller.
+// createSandboxRaw builds a raw CreateSandboxRequest for requests that require
+// proto fields the SDK create path does not expose: bare --gpu
+// (ResourceRequirements{Gpu:{Count:nil}}), counted --gpu N combined with
+// await/ephemeral, AwaitMainProcessAttachment, and RetentionEphemeral.
 func createSandboxRaw(ctx context.Context, gw gateway.Gateway, r *CreateRequest, ttyResolved bool) (*types.Sandbox, error) {
 	rawSpec := &pb.SandboxSpec{
 		Environment: r.Env,
@@ -140,11 +141,11 @@ func createSandboxRaw(ctx context.Context, gw gateway.Gateway, r *CreateRequest,
 		Command:     commandOrDefault(r.Command),
 		Tty:         ttyResolved,
 	}
-	// GPU requirements only apply when the caller explicitly requested bare GPU;
-	// AwaitMainProcessAttachment and RetentionEphemeral also reach this path but
-	// must not inject a GPU request the user never asked for.
-	if r.UsesRawGPU() {
-		rawSpec.ResourceRequirements = &pb.ResourceRequirements{Gpu: &pb.GpuResourceRequirements{Count: nil}}
+	// GPU requirements apply whenever the caller requested a GPU — bare
+	// (Count nil) or counted. Await/ephemeral routing must not drop a
+	// counted request that the SDK path (ToSDKSpec.GPUCount) would carry.
+	if r.GPU != nil {
+		rawSpec.ResourceRequirements = &pb.ResourceRequirements{Gpu: &pb.GpuResourceRequirements{Count: r.GPU.Count}}
 	}
 	if tmpl := rawTemplate(r); tmpl != nil {
 		rawSpec.Template = tmpl
