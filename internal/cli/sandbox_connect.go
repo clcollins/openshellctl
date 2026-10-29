@@ -98,7 +98,10 @@ func terminalResetSequence() []byte {
 			"\033[?1006l" + // disable SGR extended mouse encoding
 			"\033[?1004l" + // disable focus-in/focus-out reporting
 			"\033[?2004l" + // disable bracketed-paste mode
-			"\033[?1049l" + // leave alternate screen, restore saved cursor
+			"\033[?1049h\033[?1049l" + // enter-then-exit alternate screen: if no
+			//   alternate screen was active, ?1049h saves the current cursor and
+			//   ?1049l restores it (net no-op, no viewport jump); if a remote
+			//   program left the alternate screen active, ?1049l exits it.
 			"\033[?25h", //   show cursor
 	)
 }
