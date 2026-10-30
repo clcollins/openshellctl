@@ -27,8 +27,8 @@ FROM registry.fedoraproject.org/fedora:${FEDORA_VERSION} AS base
 #  checksum file = openshellctl_<version>_checksums.txt)
 # ---------------------------------------------------------------------------
 FROM base AS openshellctl
-ARG OPENSHELLCTL_VERSION="0.1.5-rc.2"
-ARG OPENSHELLCTL_CHECKSUM="221b18b37bd5be922b20869189555f007302db1c0e0dc7480665910ed506ab24"
+ARG OPENSHELLCTL_VERSION="0.1.5"
+ARG OPENSHELLCTL_CHECKSUM="17e74523fb46647de48afc52b7007f5fcfbd7e539d55e5bfb16be2e10f415bad"
 ARG OPENSHELLCTL_OS="Linux"
 ARG OPENSHELLCTL_ARCH="x86_64"
 ARG OPENSHELLCTL_DOWNLOAD_URL="https://github.com/openshift-online/openshellctl/releases/download/v${OPENSHELLCTL_VERSION}/openshellctl_${OPENSHELLCTL_OS}_${OPENSHELLCTL_ARCH}.tar.gz"
