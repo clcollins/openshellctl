@@ -10,11 +10,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
+
+	"github.com/openshift-online/openshellctl/internal/version"
+	"github.com/openshift-online/openshellctl/pkg/selfupdate"
 )
 
 // envKeyReplacer maps viper config keys to OPENSHELL_ env var names: "-" and
@@ -35,6 +40,7 @@ type persistentFlags struct {
 	verbosity       int
 	configFile      string
 	noColor         bool
+	noUpdateCheck   bool
 
 	// auth
 	token            string
@@ -53,6 +59,15 @@ type persistentFlags struct {
 	vaultFieldPrefix string
 	noVault          bool
 }
+
+// noticeResult is sent by the background notice goroutine.
+type noticeResult struct {
+	text      string
+	latestTag string
+}
+
+// noticeChKey is the context key for the notice result channel.
+type noticeChKey struct{}
 
 // NewRootCommand builds the full command tree. It is exported so tests (parity,
 // execution) can construct a fresh tree without global state.
@@ -77,8 +92,9 @@ func NewRootCommand() *cobra.Command {
 	bindViper(root)
 
 	// Runs once, after flags are parsed but before any subcommand's RunE.
-	root.PersistentPreRunE = func(_ *cobra.Command, _ []string) error {
+	root.PersistentPreRunE = func(cmd *cobra.Command, _ []string) error {
 		applyGatewayInsecureTransport()
+		startNoticeGoroutine(cmd, pf)
 		return nil
 	}
 
@@ -93,9 +109,126 @@ func NewRootCommand() *cobra.Command {
 		newGatewayCommand(),
 		newDoctorCommand(),
 		newProviderCommand(),
+		newUpdateCommand(),
 	)
 
 	return root
+}
+
+// startNoticeGoroutine launches the background update-check if all gating
+// conditions are met. The result is sent to a buffered channel stored on the
+// command's context so Execute can collect it after the command returns.
+//
+// The function has a single shared body. Tests inject an env override and a
+// fetcher via cliDeps; production code leaves both nil and the defaults are
+// used. Command and NoUpdateCheck always come from the real cobra invocation
+// so those code paths remain under test.
+func startNoticeGoroutine(cmd *cobra.Command, pf *persistentFlags) {
+	deps, _ := depsFrom(cmd.Context())
+
+	info := version.Get()
+	current := selfupdate.ParseCurrent(info.Version)
+
+	cachePath := filepath.Join(selfupdate.CacheDir(os.Getenv), "update-check.json")
+	if deps.NoticeCachePath != "" {
+		cachePath = deps.NoticeCachePath
+	}
+	cache, cacheErr := selfupdate.LoadCache(cachePath)
+	var cacheAge time.Duration
+	if cacheErr == nil {
+		cacheAge = time.Since(cache.CheckedAt)
+	} else {
+		cacheAge = selfupdate.NoticeCacheTTL + 1 // treat missing/corrupt as expired
+	}
+
+	// Build inputs from the real cobra invocation. Command comes from cmd.Name()
+	// and NoUpdateCheck from the --no-update-check flag so those gating paths
+	// are always exercised through the actual CLI plumbing.
+	in := selfupdate.CheckInputs{
+		Command:        cmd.Name(),
+		NoUpdateCheck:  pf.noUpdateCheck || os.Getenv("OPENSHELL_NO_UPDATE_CHECK") != "",
+		StdoutIsTTY:    isTerminal(os.Stdout),
+		StderrIsTTY:    isTerminal(os.Stderr),
+		CI:             os.Getenv("CI"),
+		CurrentVersion: current,
+		// CacheAge is fixed above the TTL so ShouldCheck evaluates only the
+		// TTY/CI/command/no-update-check gates; the 24 h network-call gate is
+		// owned by the fresh-cache short-circuit below.
+		CacheAge: selfupdate.NoticeCacheTTL + 1,
+	}
+	// Override only the environment-derived fields so tests can control TTY
+	// state, CI, current version, and cache age without process-level tricks.
+	// Command and NoUpdateCheck are intentionally excluded from the override.
+	if o := deps.NoticeEnvOverride; o != nil {
+		in.StdoutIsTTY = o.StdoutIsTTY
+		in.StderrIsTTY = o.StderrIsTTY
+		in.CI = o.CI
+		in.CurrentVersion = o.CurrentVersion
+		in.CacheAge = o.CacheAge
+	}
+
+	if !selfupdate.ShouldCheck(in) {
+		return
+	}
+
+	// If cache is fresh and already has a newer tag, send the notice immediately
+	// without a network call — same pattern as the GitHub CLI.
+	if cacheErr == nil && cacheAge < selfupdate.NoticeCacheTTL && cache.LatestTag != "" {
+		text := selfupdate.NoticeText(in.CurrentVersion.Tag, cache.LatestTag, pf.noColor)
+		if text != "" {
+			ch := make(chan noticeResult, 1)
+			root := cmd.Root()
+			root.SetContext(context.WithValue(root.Context(), noticeChKey{}, ch))
+			ch <- noticeResult{text: text, latestTag: cache.LatestTag}
+		}
+		return
+	}
+
+	// Cache is stale — start background goroutine to fetch from the API.
+	// Store the channel on the ROOT command's context because collectNotice
+	// reads root.Context(); cmd here is the subcommand, not the root.
+	ch := make(chan noticeResult, 1)
+	root := cmd.Root()
+	ctx := root.Context()
+	root.SetContext(context.WithValue(ctx, noticeChKey{}, ch))
+
+	noticeBudget := 2 * time.Second
+	go func() {
+		noticeCtx, cancel := context.WithTimeout(ctx, noticeBudget)
+		defer cancel()
+
+		f := deps.NoticeFetcher
+		if f == nil {
+			f = &selfupdate.GitHubFetcher{
+				Client: &http.Client{
+					Timeout:   noticeBudget,
+					Transport: freshTransport(),
+				},
+				Owner:   "openshift-online",
+				Repo:    "openshellctl",
+				Version: info.Version,
+				// No Token — must not spend or leak credentials.
+			}
+		}
+		rels, err := f.ListReleases(noticeCtx)
+		if err != nil {
+			ch <- noticeResult{}
+			return
+		}
+		rel, ok := selfupdate.SelectRelease(rels, in.CurrentVersion.IsPrerelease)
+		if !ok {
+			ch <- noticeResult{}
+			return
+		}
+		latestTag := rel.TagName
+		// Update cache so the next invocation doesn't repeat the network call.
+		_ = selfupdate.SaveCache(cachePath, selfupdate.Cache{
+			CheckedAt: time.Now().UTC(),
+			LatestTag: latestTag,
+		})
+		text := selfupdate.NoticeText(in.CurrentVersion.Tag, latestTag, pf.noColor)
+		ch <- noticeResult{text: text, latestTag: latestTag}
+	}()
 }
 
 func registerPersistentFlags(root *cobra.Command, pf *persistentFlags) {
@@ -107,6 +240,7 @@ func registerPersistentFlags(root *cobra.Command, pf *persistentFlags) {
 	f.CountVarP(&pf.verbosity, "verbose", "v", "increase verbosity")
 	f.StringVar(&pf.configFile, "config", "", "config file (default $XDG_CONFIG_HOME/openshellctl/config.yaml)")
 	f.BoolVar(&pf.noColor, "no-color", false, "disable colored output")
+	f.BoolVar(&pf.noUpdateCheck, "no-update-check", false, "skip the background update availability check (env OPENSHELL_NO_UPDATE_CHECK)")
 
 	f.StringVar(&pf.token, "token", "", "bearer token (env OPENSHELL_TOKEN)")
 	f.StringVar(&pf.clientSecretFile, "client-secret-file", "", "file containing the OIDC client secret")
@@ -176,6 +310,10 @@ func applyGatewayInsecureTransport() {
 	http.DefaultTransport = tr
 }
 
+// noticePrintGrace is how long Execute waits for the background notice after
+// the command returns before giving up.
+const noticePrintGrace = 250 * time.Millisecond
+
 // Execute builds and runs the root command, returning a process exit code.
 // It prints "Error: <msg>" to stderr for failures (root has SilenceErrors set).
 // SIGINT and SIGTERM cancel the command context so non-interactive operations
@@ -188,16 +326,22 @@ func Execute() int {
 
 	root := NewRootCommand()
 	root.SetContext(ctx)
-	if err := root.Execute(); err != nil {
+	runErr := root.Execute()
+
+	// Collect the background notice result after the command has fully returned
+	// so it can never interleave with raw-mode SSH output.
+	collectNotice(root, os.Stderr)
+
+	if runErr != nil {
 		// A remote (exec/connect/create-attach) non-zero exit is propagated as the
 		// process status without an "Error:" message — the remote command already
 		// wrote its own output.
 		var remote *RemoteExitError
-		if !errors.As(err, &remote) && !errors.Is(err, context.Canceled) {
-			fmt.Fprintf(os.Stderr, "Error: %s\n", err.Error())
+		if !errors.As(runErr, &remote) && !errors.Is(runErr, context.Canceled) {
+			fmt.Fprintf(os.Stderr, "Error: %s\n", runErr.Error())
 		}
-		code := exitCodeFor(err)
-		if hint := hintFor(err); hint != "" {
+		code := exitCodeFor(runErr)
+		if hint := hintFor(runErr); hint != "" {
 			// The "don't repeat yourself" suppression only makes sense for the
 			// generic refresh hint — e.g. ErrTokenExpired's own message
 			// sometimes already names `openshellctl login` as its remediation.
@@ -206,7 +350,7 @@ func Execute() int {
 			// they must not be silently dropped by the same check.
 			suppress := hint == refreshHint
 			if suppress {
-				msg := err.Error()
+				msg := runErr.Error()
 				suppress = strings.Contains(msg, "openshellctl token refresh") || strings.Contains(msg, "openshellctl login")
 			}
 			if !suppress {
@@ -216,4 +360,22 @@ func Execute() int {
 		return code
 	}
 	return ExitOK
+}
+
+// collectNotice does a short non-blocking wait for the background notice
+// goroutine, prints the notice to w if one arrived in time, and discards
+// anything that is not ready.
+func collectNotice(root *cobra.Command, w interface{ Write([]byte) (int, error) }) {
+	ch, ok := root.Context().Value(noticeChKey{}).(chan noticeResult)
+	if !ok || ch == nil {
+		return
+	}
+	select {
+	case res := <-ch:
+		if res.text != "" {
+			fmt.Fprintln(w, res.text)
+		}
+	case <-time.After(noticePrintGrace):
+		// Grace period expired; drop the notice to avoid delaying the user.
+	}
 }

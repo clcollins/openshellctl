@@ -17,7 +17,7 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOFLAGS="-mod=readonly -buildvcs=false" \
     go build \
-      -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.openshellPin=${OPENSHELL_PIN}" \
+      -ldflags "-X main.version=${VERSION} -X main.commit=${COMMIT} -X main.openshellPin=${OPENSHELL_PIN} -X main.installMethod=container" \
       -o /tmp/openshellctl \
       ./cmd/openshellctl
 

@@ -1,5 +1,21 @@
 {
   "note": "openshellctl-only flags not present in the upstream openshell CLI at the pinned version. See hack/parity/sandbox_flags_v0.1.3.json for upstream flags. parity_test.go confirms every flag on an implemented subcommand (see implementedSubcommands in parity_test.go) appears in exactly one of the two files.",
+  "commands": {
+    "update": {
+      "note": "openshellctl-only; upstream openshell Rust CLI has no self-update command (checked crates/openshell-cli/src/main.rs at v0.1.5). Ticket: 0005.",
+      "flags": [
+        {"long": "version", "type": "string", "note": "release tag to install (accepts vX.Y.Z or X.Y.Z)"},
+        {"long": "prerelease", "type": "bool", "note": "allow pre-release selection"},
+        {"long": "check", "type": "bool", "note": "report only, do not download"}
+      ]
+    }
+  },
+  "persistent_flags": {
+    "note": "Flags inherited by all subcommands via root PersistentFlags.",
+    "openshellctl_only": [
+      {"long": "no-update-check", "type": "bool", "env": "OPENSHELL_NO_UPDATE_CHECK", "note": "disable background update notice; 0005"}
+    ]
+  },
   "subcommands": {
     "create": [
       {"long": "file", "short": "f", "type": "string", "note": "manifest input (- for stdin, or an http(s):// URL as of ROSAENG-74491 — openshellctl-only, no upstream Rust CLI equivalent); docs/plans/0002-openshell-go-client-plan.md:585"},

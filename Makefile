@@ -137,7 +137,7 @@ generate: ## Run go generate
 	go generate ./...
 
 .PHONY: verify
-verify: verify-pin verify-tidy verify-generate ## Run all verification checks
+verify: verify-pin verify-tidy verify-generate verify-checksum-template ## Run all verification checks
 
 .PHONY: verify-pin
 verify-pin: ## Verify the OpenShell pin is consistent
@@ -151,6 +151,10 @@ verify-tidy: ## Verify go.mod and go.sum are tidy
 .PHONY: verify-generate
 verify-generate: generate ## Verify generated code is up to date
 	git diff --exit-code
+
+.PHONY: verify-checksum-template
+verify-checksum-template: ## Verify .goreleaser.yaml checksum template matches selfupdate.ChecksumAssetName
+	./hack/verify-checksum-template.sh
 
 .PHONY: test-vuln
 test-vuln: ## Check for known vulnerabilities in dependencies

@@ -23,6 +23,20 @@ cd openshellctl
 make build          # binary at ./openshellctl
 ```
 
+## Updating
+
+```bash
+openshellctl update                    # latest stable release
+openshellctl update --prerelease       # latest stable or pre-release
+openshellctl update --version v0.1.5   # specific version (also accepts 0.1.5)
+openshellctl update --check            # report the available version without installing
+```
+
+After any command finishes, openshellctl prints a one-line notice to stderr when a newer
+release is available. The check runs in the background and adds at most 250 ms to the
+command's exit time. To disable it: pass `--no-update-check` or set
+`OPENSHELL_NO_UPDATE_CHECK=1`.
+
 ## Quick start
 
 Three complete, runnable paths from a clean machine to a working sandbox,
@@ -1014,6 +1028,7 @@ openshellctl is a compatible reimplementation with these intentional differences
 - **Gitignore filtering**: uses compiled `.gitignore` rules instead of shelling out to `git ls-files`. Tracked-but-ignored files are excluded (matching untracked behaviour) rather than re-included.
 - **`gateway add` registers OIDC gateways only**: no mTLS or non-OIDC ("edge") gateway registration. When a client secret is absent and `OPENSHELL_NO_BROWSER` is set, `gateway add` registers the gateway and prints a hint instead of opening a browser (upstream always opens one). See [`docs/gateway.md`](docs/gateway.md).
 - **Endpoint matching tolerates formatting differences**: upstream only trims a trailing slash. openshellctl also ignores scheme/host case and an explicit default port (`:443`/`:80`), so `https://host:443` (as `gateway add` writes it) still matches `https://host/` (as an exported env var commonly reads). A different port, or a different path/query/fragment, is still a different gateway. See [`docs/gateway.md`](docs/gateway.md).
+- **`openshellctl update` (self-update)**: downloads, verifies (SHA-256), and atomically replaces the running binary. The upstream Rust CLI has no equivalent (checked at v0.1.5). See [Updating](#updating).
 
 ## License
 

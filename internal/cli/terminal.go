@@ -14,6 +14,11 @@ func isReady(sb *types.Sandbox) bool {
 	return sb.Status.Phase == types.SandboxReady
 }
 
+// isTerminal reports whether f is connected to a terminal.
+func isTerminal(f *os.File) bool {
+	return term.IsTerminal(int(f.Fd()))
+}
+
 // terminalSize returns the terminal (cols, rows) for fd, defaulting to 80x24
 // when it cannot be determined.
 func terminalSize(fd int) (cols, rows uint32) {

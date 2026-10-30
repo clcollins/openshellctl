@@ -45,7 +45,18 @@ changelog:
       - "^docs:"
       - "^test:"
 
+checksum:
+  # Explicit template keeps the shape stable so selfupdate.ChecksumAssetName
+  # can construct the filename without parsing the YAML at runtime.
+  name_template: "{{ .ProjectName }}_{{ .Version }}_checksums.txt"
+  algorithm: sha256
+
 release:
   github:
     owner: openshift-online
     name: openshellctl
+  # -rc.N tags become GitHub pre-releases so /releases/latest returns a stable
+  # tag instead of an rc. The client also filters pre-releases by semver, but
+  # the flag keeps the GitHub UI and install scripts consistent.
+  prerelease: auto
+  draft: false
