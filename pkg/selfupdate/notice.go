@@ -123,19 +123,19 @@ func SaveCache(path string, c Cache) error {
 	_, writeErr := tmp.Write(data)
 	closeErr := tmp.Close()
 	if writeErr != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return writeErr
 	}
 	if closeErr != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return closeErr
 	}
 	if err := os.Chmod(tmpPath, 0o600); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	if err := os.Rename(tmpPath, path); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return err
 	}
 	return nil

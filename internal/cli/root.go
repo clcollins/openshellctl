@@ -373,7 +373,7 @@ func collectNotice(root *cobra.Command, w interface{ Write([]byte) (int, error) 
 	select {
 	case res := <-ch:
 		if res.text != "" {
-			fmt.Fprintln(w, res.text)
+			_, _ = fmt.Fprintln(w, res.text)
 		}
 	case <-time.After(noticePrintGrace):
 		// Grace period expired; drop the notice to avoid delaying the user.

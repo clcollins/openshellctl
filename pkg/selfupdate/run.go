@@ -187,7 +187,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	}
 	csPath, err := fetchToTemp(ctx, client, checksumAsset.BrowserDownloadURL, workDir, maxChecksumFileSize)
 	if csPath != "" {
-		defer os.Remove(csPath)
+		defer func() { _ = os.Remove(csPath) }()
 	}
 	if err != nil {
 		return Result{}, fmt.Errorf("downloading checksum file: %w", err)
@@ -198,7 +198,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 	checksums, parseErr := ParseChecksums(csFile)
-	csFile.Close()
+	_ = csFile.Close()
 	if parseErr != nil {
 		return Result{}, fmt.Errorf("parsing checksums: %w", parseErr)
 	}
@@ -211,7 +211,7 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 	// 5. Download archive and verify its SHA-256 against the checksum file.
 	archivePath, err := DownloadAndVerify(ctx, client, archiveAsset.BrowserDownloadURL, workDir, wantHex, maxBytes)
 	if archivePath != "" {
-		defer os.Remove(archivePath)
+		defer func() { _ = os.Remove(archivePath) }()
 	}
 	if err != nil {
 		return Result{}, fmt.Errorf("downloading archive: %w", err)
@@ -223,8 +223,8 @@ func Run(ctx context.Context, opts Options) (Result, error) {
 		return Result{}, err
 	}
 	binTmpPath := binTmp.Name()
-	binTmp.Close()
-	defer os.Remove(binTmpPath)
+	_ = binTmp.Close()
+	defer func() { _ = os.Remove(binTmpPath) }()
 
 	if err := ExtractBinary(archivePath, binTmpPath, maxBytes); err != nil {
 		return Result{}, err
@@ -283,7 +283,7 @@ func fetchToTemp(ctx context.Context, client *http.Client, url, dir string, maxB
 	if err != nil {
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return "", fmt.Errorf("HTTP %d fetching %s", resp.StatusCode, url)
 	}
@@ -297,15 +297,15 @@ func fetchToTemp(ctx context.Context, client *http.Client, url, dir string, maxB
 	n, copyErr := io.Copy(tmp, io.LimitReader(resp.Body, maxBytes+1))
 	closeErr := tmp.Close()
 	if copyErr != nil {
-		os.Remove(path)
+		_ = os.Remove(path)
 		return "", copyErr
 	}
 	if closeErr != nil {
-		os.Remove(path)
+		_ = os.Remove(path)
 		return "", closeErr
 	}
 	if n > maxBytes {
-		os.Remove(path)
+		_ = os.Remove(path)
 		return "", fmt.Errorf("%s exceeded size limit of %d bytes", url, maxBytes)
 	}
 	return path, nil

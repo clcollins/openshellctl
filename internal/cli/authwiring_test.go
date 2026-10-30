@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
@@ -149,6 +150,25 @@ func TestResolveAuth_NoDepsFallsThrough(t *testing.T) {
 	_, _, err := resolveAuth(cmdWithContext(context.Background()))
 	if err == nil {
 		t.Fatal("expected an error from the real resolveTokenSource path (no gateway configured)")
+	}
+}
+
+// TestDialOrInjected_ErrorPathCloserIsNilInterface confirms that when
+// dialGateway returns an error, dialOrInjected returns a true nil io.Closer
+// (not a non-nil interface wrapping a nil *gateway.Conn). A typed-nil
+// *gateway.Conn assigned to io.Closer is non-nil, so the "if gwCloser != nil"
+// guard in doctor/run.go would pass and Close() would panic on a nil receiver.
+func TestDialOrInjected_ErrorPathCloserIsNilInterface(t *testing.T) {
+	// http:// endpoint with a bearer token → ErrPlaintextWithAuth, a clean
+	// synchronous error that doesn't require network access.
+	target := &gatewayconfig.Target{Endpoint: "http://127.0.0.1:0"}
+	src := auth.NewStaticSource("bearer-token", func() time.Time { return time.Time{} })
+	_, closer, err := dialOrInjected(cmdWithContext(context.Background()), target, src)
+	if err == nil {
+		t.Fatal("expected an error from dialGateway (ErrPlaintextWithAuth)")
+	}
+	if closer != nil {
+		t.Errorf("closer = %v (%T), want a true nil interface on the error path", closer, closer)
 	}
 }
 

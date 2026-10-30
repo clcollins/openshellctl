@@ -32,10 +32,13 @@ func setupDoctorGatewayTree(t *testing.T, endpoint, jwt string) {
 	}
 }
 
-// TestDoctorCommand_AllGreen runs `doctor` end to end through the real
-// command tree (no cliDeps injection — real on-disk gateway tree, a real
-// JWT bundle, and a real httptest.Server standing in for the gateway's
-// /auth/oidc-config endpoint) and confirms every check passes.
+// TestDoctorCommand_AllGreen runs `doctor` end to end through the real command
+// tree with no cliDeps injection. The gateway endpoint is a plain-HTTP
+// httptest.Server, which gateway.Dial correctly rejects with ErrPlaintextWithAuth
+// when a bearer token is present. The Roles check falls back to CheckRolesToken
+// (token-claims path); with no --provider requested, Providers is skipped.
+// Skips render as "-", not "✗", so all-green holds via the fallback path.
+// The gateway-authoritative Roles path is covered hermetically in pkg/doctor.
 func TestDoctorCommand_AllGreen(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/auth/oidc-config" {
@@ -135,17 +138,28 @@ func noRoleJWT(t *testing.T, aud string) string {
 }
 
 // TestDoctorCommand_RolesFail_Exit7 confirms a token with no gateway role
-// fails the Roles check with exit code 7 (the ticket's third acceptance
-// criterion — "unit test with a synthetic JWT payload").
+// fails the Roles check with exit code 7. Uses the cliDeps seam: a mock
+// gateway whose CurrentUser returns an empty Roles slice so CheckRolesGateway
+// (the authoritative path) fires; CheckRolesToken is advisory-only and would
+// only skip, not fail, when roles are absent.
 func TestDoctorCommand_RolesFail_Exit7(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"issuer":"https://issuer","audience":"openshell-cli"}`))
 	}))
 	defer srv.Close()
 
-	setupDoctorGatewayTree(t, srv.URL, noRoleJWT(t, "openshell-cli"))
+	ctrl := gomock.NewController(t)
+	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().
+		CurrentUser(gomock.Any()).
+		Return(&types.CurrentUser{Roles: []string{}}, nil)
 
-	out, err := runCmd(t, "doctor", "--gateway-endpoint", srv.URL)
+	deps := cliDeps{
+		Gateway:     gw,
+		Target:      &gatewayconfig.Target{Name: "test", Endpoint: srv.URL},
+		TokenSource: auth.NewStaticSource(noRoleJWT(t, "openshell-cli"), nil),
+	}
+	out, err := runCmdWithGateway(t, deps, "doctor")
 	if err == nil {
 		t.Fatalf("expected an error, got success:\n%s", out)
 	}
@@ -173,6 +187,9 @@ func TestDoctorCommand_ProviderFlag_DialsMockGateway(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().
+		CurrentUser(gomock.Any()).
+		Return(&types.CurrentUser{Roles: []string{"openshell-user"}}, nil)
 	gw.EXPECT().
 		ListProviders(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return([]*types.Provider{{Name: "my-openai", Type: "openai"}}, nil)
@@ -202,6 +219,9 @@ func TestDoctorCommand_ProviderFlag_NotFound(t *testing.T) {
 
 	ctrl := gomock.NewController(t)
 	gw := mock.NewMockGateway(ctrl)
+	gw.EXPECT().
+		CurrentUser(gomock.Any()).
+		Return(&types.CurrentUser{Roles: []string{"openshell-user"}}, nil)
 	gw.EXPECT().
 		ListProviders(gomock.Any(), gomock.Any(), gomock.Any()).
 		Return(nil, nil)
