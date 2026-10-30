@@ -149,13 +149,49 @@ func resolveVaultAuthSource(ctx context.Context, allowPersistedFallback bool) er
 		return &UsageError{Err: fmt.Errorf("--vault-kv-mount and --vault-kv-path must be set together")}
 	}
 
+	// Compute overrides before the Vault read: this lets us decide whether a
+	// Vault failure is recoverable — if the caller already has client credentials
+	// from flags/env, a failed read won't leave them missing any auth value.
+	overrides := vaultconfig.Overrides{
+		Gateway:            viper.GetString("gateway") != "",
+		GatewayEndpoint:    viper.GetString("gateway-endpoint") != "",
+		OIDCClientID:       viper.GetString("oidc-client-id") != "",
+		ClientSecretSource: viper.GetString("oidc.client_secret") != "" || viper.GetString("client-secret-file") != "",
+		OIDCIssuer:         viper.GetString("oidc-issuer") != "",
+		OIDCAudience:       viper.GetString("oidc-audience") != "",
+	}
+
+	clientOverridden := overrides.OIDCClientID || overrides.ClientSecretSource
+	gatewayOverridden := overrides.Gateway || overrides.GatewayEndpoint
+	// vaultNonFatal is true only when Vault has nothing left to contribute:
+	// the caller has explicitly set both the OIDC client-credentials cluster
+	// AND the gateway cluster, so every field ToViperDefaults would set from
+	// Vault is already blocked by an override. Requiring both — not just one —
+	// prevents a spurious non-fatal when Vault is still the gateway source
+	// (MCS-357 AC2 review finding).
+	vaultNonFatal := clientOverridden && gatewayOverridden
+
 	reader, err := vaultReaderFor(ctx)
 	if err != nil {
+		// vaultReaderFor fails before any network I/O (e.g. VAULT_ADDR unset,
+		// token not resolvable). Apply the same AC2 demotion as ReadSecret errors.
+		if vaultNonFatal {
+			fmt.Fprintf(os.Stderr, "Warning: vault setup failed (%v); continuing because all auth values are set via flag/env\n", err)
+			return nil
+		}
 		return err
 	}
 
 	data, err := reader.ReadSecret(ctx, mount, path)
 	if err != nil {
+		// When both auth clusters are already fully supplied by flag/env, Vault
+		// cannot contribute any auth values the caller doesn't already have.
+		// Demote the read failure to a no-op: an expired Vault token must not
+		// block a user who has all their own auth values set (MCS-357 AC2).
+		if vaultNonFatal {
+			fmt.Fprintf(os.Stderr, "Warning: vault read failed (%v); continuing because all auth values are set via flag/env\n", err)
+			return nil
+		}
 		return err
 	}
 
@@ -164,16 +200,33 @@ func resolveVaultAuthSource(ctx context.Context, allowPersistedFallback bool) er
 		return err
 	}
 
-	overrides := vaultconfig.Overrides{
-		Gateway:            viper.GetString("gateway") != "",
-		GatewayEndpoint:    viper.GetString("gateway-endpoint") != "",
-		OIDCClientID:       viper.GetString("oidc-client-id") != "",
-		ClientSecretSource: viper.GetString("oidc.client_secret") != "" || viper.GetString("client-secret-file") != "",
+	// AC3 (MCS-357): when the user supplied an explicit gateway value (via
+	// --gateway/-g, --gateway-endpoint, or their OPENSHELL_* equivalents)
+	// and Vault's secret contains a DIFFERENT value for the same field, warn
+	// rather than silently dropping Vault's value. ToViperDefaults still
+	// excludes it — the explicit value wins — but the discrepancy is surfaced
+	// so the user knows the secret may be scoped to a different gateway.
+	if overrides.Gateway {
+		warnIfVaultMismatch("gateway", viper.GetString("gateway"), fields)
 	}
+	if overrides.GatewayEndpoint {
+		warnIfVaultMismatch("gateway-endpoint", viper.GetString("gateway-endpoint"), fields)
+	}
+
 	for key, val := range vaultconfig.ToViperDefaults(fields, overrides) {
 		viper.SetDefault(key, val)
 	}
 	return nil
+}
+
+// warnIfVaultMismatch emits an AC3 warning when a Vault secret carries a value
+// for field that conflicts with the already-set userVal. A no-op when fields
+// has no entry for field or when the values agree.
+func warnIfVaultMismatch(field, userVal string, fields map[string]string) {
+	if vaultVal := fields[field]; vaultVal != "" && vaultVal != userVal {
+		fmt.Fprintf(os.Stderr, "Warning: vault secret contains %s=%q but %s is already set to %q; vault value ignored\n",
+			field, vaultVal, field, userVal)
+	}
 }
 
 // persistedVaultAuthConfig looks up a previously-persisted Vault mount/path/

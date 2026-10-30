@@ -54,6 +54,14 @@ func ViperKey(suffix string) string {
 // atomic (see the package doc and docs/plans/0003 §3.1) rather than letting
 // Vault silently fill one half of a pair while the other half comes from
 // somewhere else.
+//
+// The gateway pair (Gateway+GatewayEndpoint) is fully atomic: either member
+// blocks Vault from filling both. The client-credentials cluster
+// (OIDCClientID+ClientSecretSource) triggers a wider block: when either is set,
+// Vault is prevented from filling oidc-issuer, oidc-audience, and oidc-scopes
+// as well — Vault must not supply credentials from a different environment into
+// an explicitly configured auth session (MCS-357). OIDCIssuer and OIDCAudience
+// each independently block only their own field from Vault.
 type Overrides struct {
 	// Gateway is true when --gateway/OPENSHELL_GATEWAY is set.
 	Gateway bool
@@ -64,6 +72,10 @@ type Overrides struct {
 	// ClientSecretSource is true when OPENSHELL_OIDC_CLIENT_SECRET or
 	// --client-secret-file is set.
 	ClientSecretSource bool
+	// OIDCIssuer is true when --oidc-issuer/OPENSHELL_OIDC_ISSUER is set.
+	OIDCIssuer bool
+	// OIDCAudience is true when --oidc-audience/OPENSHELL_OIDC_AUDIENCE is set.
+	OIDCAudience bool
 }
 
 // ExtractFields reads the known field suffixes out of a raw Vault secret's
@@ -92,10 +104,15 @@ func ExtractFields(data map[string]any, prefix string) (map[string]string, error
 // final viper key -> value map ready for viper.SetDefault, applying:
 //   - precedence: a field with an empty value is skipped (never defaults an
 //     "unset" key to another kind of "unset");
-//   - pairing: if either half of the gateway/gateway-endpoint pair, or either
-//     half of the oidc-client-id/oidc-client-secret pair, is already
-//     overridden (per ov), both halves of that pair are excluded from the
-//     result, even if Vault supplied a value for them.
+//   - pairing: the gateway pair (gateway/gateway-endpoint) is atomic — if
+//     either is overridden, both are excluded from Vault defaults;
+//   - clustering: when the client-credentials cluster (oidc-client-id or
+//     oidc-client-secret) is explicitly set, oidc-issuer, oidc-audience,
+//     and oidc-scopes are also excluded — Vault must not supply any of these
+//     for a non-production client identity that targets a different provider
+//     (MCS-357);
+//   - individual: an explicit oidc-issuer or oidc-audience override blocks
+//     only that specific field from Vault.
 func ToViperDefaults(fields map[string]string, ov Overrides) map[string]string {
 	gatewayPairOverridden := ov.Gateway || ov.GatewayEndpoint
 	clientPairOverridden := ov.OIDCClientID || ov.ClientSecretSource
@@ -111,6 +128,18 @@ func ToViperDefaults(fields map[string]string, ov Overrides) map[string]string {
 				continue
 			}
 		case "oidc-client-id", "oidc-client-secret":
+			if clientPairOverridden {
+				continue
+			}
+		case "oidc-issuer":
+			if clientPairOverridden || ov.OIDCIssuer {
+				continue
+			}
+		case "oidc-audience":
+			if clientPairOverridden || ov.OIDCAudience {
+				continue
+			}
+		case "oidc-scopes":
 			if clientPairOverridden {
 				continue
 			}
