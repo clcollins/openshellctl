@@ -1,0 +1,84 @@
+# CI image for validating the openshellctl "three command" Vault getting-started path:
+#
+#   export VAULT_ADDR=https://vault.example.com
+#   vault login -method=oidc
+#   openshellctl sandbox list
+#
+# Build:  make e2e-image
+# Test:   make e2e             (real Vault via OIDC browser auth + real gateway)
+#
+# Base image: Fedora (not UBI or a minimal scratch image) — this is a UX test.
+# We want to mirror the kind of environment a typical user or contributor runs
+# locally: a full general-purpose Linux distro with standard tooling available.
+# UBI is optimised for production workloads; Fedora is what engineers actually
+# sit at. Using Fedora here catches packaging or PATH surprises that UBI's
+# stripped-down environment would hide.
+#
+# Package sourcing mirrors clcollins/toolbox-devtools:
+#   - vault:        HashiCorp dnf repo, --exclude=openbao* (openbao also provides /usr/bin/vault)
+#   - openshellctl: GitHub release tarball, sha256-verified in its own stage, copied into the final image
+
+ARG FEDORA_VERSION=44
+FROM registry.fedoraproject.org/fedora:${FEDORA_VERSION} AS base
+
+# ---------------------------------------------------------------------------
+# openshellctl stage: download + verify the goreleaser archive
+# (.goreleaser.yaml: archive = openshellctl_Linux_x86_64.tar.gz,
+#  checksum file = openshellctl_<version>_checksums.txt)
+# ---------------------------------------------------------------------------
+FROM base AS openshellctl
+ARG OPENSHELLCTL_VERSION="0.1.5-rc.2"
+ARG OPENSHELLCTL_CHECKSUM="221b18b37bd5be922b20869189555f007302db1c0e0dc7480665910ed506ab24"
+ARG OPENSHELLCTL_OS="Linux"
+ARG OPENSHELLCTL_ARCH="x86_64"
+ARG OPENSHELLCTL_DOWNLOAD_URL="https://github.com/openshift-online/openshellctl/releases/download/v${OPENSHELLCTL_VERSION}/openshellctl_${OPENSHELLCTL_OS}_${OPENSHELLCTL_ARCH}.tar.gz"
+
+RUN curl -fSL "${OPENSHELLCTL_DOWNLOAD_URL}" -o /tmp/openshellctl.tar.gz \
+  && echo "${OPENSHELLCTL_CHECKSUM}  /tmp/openshellctl.tar.gz" | sha256sum --check --status \
+  && tar xz -C /usr/local/bin -f /tmp/openshellctl.tar.gz openshellctl \
+  && chmod +x /usr/local/bin/openshellctl \
+  && rm /tmp/openshellctl.tar.gz
+
+# ---------------------------------------------------------------------------
+# Final image
+# ---------------------------------------------------------------------------
+FROM base
+LABEL author="Chris Collins <collins.christopher@gmail.com>"
+
+# HashiCorp repository (same as toolbox-devtools; openbao excluded for the same reason)
+ENV VAULT_CLI_REPO="https://rpm.releases.hashicorp.com/fedora/hashicorp.repo"
+ENV PKGS="vault jq"
+
+RUN dnf install --assumeyes 'dnf-command(config-manager)' \
+  && dnf config-manager addrepo --from-repofile=${VAULT_CLI_REPO} \
+  && dnf install --assumeyes --setopt=install_weak_deps=False --setopt=tsflags=nodocs \
+       --exclude=openbao --exclude=openbao-vault-compat ${PKGS} \
+  && setcap -r /usr/bin/vault \
+  && dnf clean all \
+  && rm --recursive --force /var/cache/yum/ /var/cache/dnf/
+
+COPY --from=openshellctl /usr/local/bin/openshellctl /usr/local/bin/openshellctl
+
+# "Out of the box": the three commands carry no --vault-kv-* flags, so the
+# Vault coordinates must already be in the environment. These are the
+# team's shared HyperShell service-account secret; override at build time
+# for another gateway/secret.
+ARG OPENSHELL_VAULT_KV_MOUNT="osd-sre"
+ARG OPENSHELL_VAULT_KV_PATH="rosa-agent"
+ARG OPENSHELL_VAULT_FIELD_PREFIX="hypershell"
+ENV OPENSHELL_VAULT_KV_MOUNT="${OPENSHELL_VAULT_KV_MOUNT}" \
+    OPENSHELL_VAULT_KV_PATH="${OPENSHELL_VAULT_KV_PATH}" \
+    OPENSHELL_VAULT_FIELD_PREFIX="${OPENSHELL_VAULT_FIELD_PREFIX}" \
+    OPENSHELL_NO_UPDATE_CHECK=1
+
+RUN useradd --create-home --uid 1001 ci
+COPY --chmod=0755 test/e2e-ux-test.sh /usr/local/bin/openshellctl-e2e-test
+# Non-root user with a writable HOME: `vault login` writes ~/.vault-token and
+# openshellctl caches tokens under $HOME/.config/openshell/.
+USER ci
+WORKDIR /home/ci
+ENV HOME=/home/ci
+
+RUN vault version && openshellctl version
+
+CMD ["/usr/local/bin/openshellctl-e2e-test"]

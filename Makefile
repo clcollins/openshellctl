@@ -24,6 +24,26 @@ IMAGE           ?= openshellctl
 IMAGE_TAG       ?= $(VERSION)
 CONTAINER_ENGINE ?= podman
 
+# E2E UX test image — validates the "three command" getting-started path in a
+# Fedora user environment. See test/Containerfile.e2e and test/e2e-ux-test.sh.
+E2E_IMAGE            ?= localhost/openshellctl-e2e
+E2E_FEDORA_VERSION   ?= 44
+# Pinned to the latest prerelease. Run `make e2e-bump` to update.
+E2E_OPENSHELLCTL_VERSION  ?= 0.1.5-rc.2
+E2E_OPENSHELLCTL_CHECKSUM ?= 221b18b37bd5be922b20869189555f007302db1c0e0dc7480665910ed506ab24
+E2E_IMAGE_TAG             ?= $(E2E_OPENSHELLCTL_VERSION)
+# Vault KV coordinates baked into the image (overridable at build time).
+E2E_VAULT_KV_MOUNT     ?= osd-sre
+E2E_VAULT_KV_PATH      ?= rosa-agent
+E2E_VAULT_FIELD_PREFIX ?= hypershell
+# VAULT_ADDR is required for make e2e (vault login -method=oidc runs inside the container).
+# E2E_VAULT_CALLBACK_PORT: host port published to container port 8250 for the OIDC callback.
+# Vault sends the browser to localhost:<callback-port>/oidc/callback after authentication.
+# The Vault OIDC role's allowed_redirect_uris must include http://localhost:<port>/oidc/callback.
+VAULT_ADDR              ?=
+E2E_VAULT_CALLBACK_PORT ?= 8250
+E2E_CHECKSUMS_URL = https://github.com/openshift-online/openshellctl/releases/download/v$(E2E_OPENSHELLCTL_VERSION)/openshellctl_$(E2E_OPENSHELLCTL_VERSION)_checksums.txt
+
 # Ensure go modules are enabled:
 export GO111MODULE = on
 export GOPROXY = https://proxy.golang.org
@@ -182,6 +202,56 @@ ensure-goreleaser: ## Ensure goreleaser is installed
 release: ensure-goreleaser ## Create a release using goreleaser
 	@echo "Creating a release..."
 	goreleaser release --clean --parallelism 1
+
+# ---------------------------------------------------------------------------
+# E2E UX tests
+# ---------------------------------------------------------------------------
+
+.PHONY: e2e-image
+e2e-image: ## Build the E2E UX test image (Fedora + vault + pinned openshellctl RC)
+	$(CONTAINER_ENGINE) build \
+		--build-arg FEDORA_VERSION=$(E2E_FEDORA_VERSION) \
+		--build-arg OPENSHELLCTL_VERSION=$(E2E_OPENSHELLCTL_VERSION) \
+		--build-arg OPENSHELLCTL_CHECKSUM=$(E2E_OPENSHELLCTL_CHECKSUM) \
+		--build-arg OPENSHELL_VAULT_KV_MOUNT=$(E2E_VAULT_KV_MOUNT) \
+		--build-arg OPENSHELL_VAULT_KV_PATH=$(E2E_VAULT_KV_PATH) \
+		--build-arg OPENSHELL_VAULT_FIELD_PREFIX=$(E2E_VAULT_FIELD_PREFIX) \
+		-f test/Containerfile.e2e -t $(E2E_IMAGE):$(E2E_IMAGE_TAG) .
+
+.PHONY: e2e
+e2e: e2e-image ## E2E UX test: vault login -method=oidc inside the container, then openshellctl sandbox list (needs VAULT_ADDR)
+	@test -n "$(VAULT_ADDR)" || { \
+		echo ""; \
+		echo "VAULT_ADDR is required."; \
+		echo "  export VAULT_ADDR=https://vault.example.com"; \
+		echo "  make e2e"; \
+		echo "or:"; \
+		echo "  make e2e VAULT_ADDR=https://vault.example.com"; \
+		echo ""; \
+		exit 2; }
+	@$(CONTAINER_ENGINE) run --rm \
+		-p 127.0.0.1:$(E2E_VAULT_CALLBACK_PORT):8250 \
+		-e VAULT_ADDR \
+		-e VAULT_CALLBACK_PORT=$(E2E_VAULT_CALLBACK_PORT) \
+		$(E2E_IMAGE):$(E2E_IMAGE_TAG)
+
+.PHONY: e2e-shell
+e2e-shell: e2e-image ## Interactive shell in the E2E test image
+	$(CONTAINER_ENGINE) run --rm -it --entrypoint /bin/bash $(E2E_IMAGE):$(E2E_IMAGE_TAG)
+
+.PHONY: e2e-checksum
+e2e-checksum: ## Print the sha256 for E2E_OPENSHELLCTL_VERSION's Linux x86_64 archive
+	@curl -fsSL $(E2E_CHECKSUMS_URL) | awk '/openshellctl_Linux_x86_64.tar.gz/ {print $$1}'
+
+.PHONY: e2e-bump
+e2e-bump: ## Update E2E_OPENSHELLCTL_VERSION and its checksum (make e2e-bump E2E_OPENSHELLCTL_VERSION=x.y.z-rc.N)
+	@sum=$$(curl -fsSL $(E2E_CHECKSUMS_URL) | awk '/openshellctl_Linux_x86_64.tar.gz/ {print $$1}'); \
+	test -n "$$sum" || { echo "no checksum found at $(E2E_CHECKSUMS_URL)"; exit 1; }; \
+	sed -i \
+	    -e 's/^E2E_OPENSHELLCTL_VERSION  ?= .*/E2E_OPENSHELLCTL_VERSION  ?= $(E2E_OPENSHELLCTL_VERSION)/' \
+	    -e "s/^E2E_OPENSHELLCTL_CHECKSUM ?= .*/E2E_OPENSHELLCTL_CHECKSUM ?= $$sum/" \
+	    Makefile; \
+	echo "pinned $(E2E_OPENSHELLCTL_VERSION) $$sum"
 
 .PHONY: clean
 clean: ## Clean up build artifacts
