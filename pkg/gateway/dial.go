@@ -203,6 +203,9 @@ func stripScheme(endpoint string) string {
 
 // Close closes the raw conn and the SDK client.
 func (c *Conn) Close() error {
+	if c == nil {
+		return nil
+	}
 	var firstErr error
 	if c.rawConn != nil {
 		if err := c.rawConn.Close(); err != nil {

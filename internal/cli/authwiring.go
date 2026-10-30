@@ -225,7 +225,11 @@ func dialOrInjected(cmd *cobra.Command, target *gatewayconfig.Target, src auth.T
 	if deps, ok := depsFrom(cmd.Context()); ok && deps.Gateway != nil {
 		return deps.Gateway, noopCloser{}, nil
 	}
-	return dialGateway(target, src)
+	gw, conn, err := dialGateway(target, src)
+	if err != nil {
+		return nil, nil, err
+	}
+	return gw, conn, nil
 }
 
 // dialGateway builds a gateway.Gateway from a resolved target and token source.
