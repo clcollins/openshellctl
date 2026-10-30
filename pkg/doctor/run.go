@@ -26,6 +26,7 @@ import (
 type Deps struct {
 	ResolveAuth   func(ctx context.Context) (auth.TokenSource, *gatewayconfig.Target, error)
 	Dial          func(ctx context.Context, target *gatewayconfig.Target, src auth.TokenSource) (gateway.Gateway, io.Closer, error)
+	CurrentUser   func(ctx context.Context, gw gateway.Gateway) (*types.CurrentUser, error)
 	ListProviders func(ctx context.Context, gw gateway.Gateway, workspace string) ([]*types.Provider, error)
 
 	LookupIP LookupIPFunc
@@ -150,14 +151,42 @@ func Run(ctx context.Context, d Deps) []CheckResult {
 	credResult := CheckCredentials(tok, resolveErr)
 	add(credResult)
 
-	// 5-7: need the minted token.
+	// 5-7: need the minted token. Additionally, attempt a single gateway dial
+	// here (when Dial and CurrentUser are wired) so the Roles check asks the
+	// gateway — the real enforcement point — rather than inspecting raw JWT
+	// claims that hsctl-managed gateways don't use. The same open connection
+	// is reused for the Providers check (check 9) if requested, and closed
+	// once at the end of Run.
+	var gw gateway.Gateway
+	var gwCloser io.Closer
+	gwDialed := false // true once a successful Dial call has been made
 	if credResult.Status != StatusPass {
 		add(skipResult("Audience", "Credentials check failed"))
 		add(skipResult("Roles", "Credentials check failed"))
 		add(skipResult("Expiry", "Credentials check failed"))
 	} else {
 		add(CheckAudience(tok, d.WantAudience))
-		add(CheckRoles(tok))
+
+		// Roles: gateway-authoritative when reachable, token-claims fallback otherwise.
+		switch {
+		case d.Dial == nil || d.CurrentUser == nil:
+			add(CheckRolesToken(tok))
+		default:
+			var dialErr error
+			gw, gwCloser, dialErr = d.Dial(ctx, target, src)
+			if dialErr != nil {
+				add(CheckRolesToken(tok))
+			} else {
+				gwDialed = true
+				user, cuErr := d.CurrentUser(ctx, gw)
+				if cuErr != nil {
+					add(CheckRolesToken(tok))
+				} else {
+					add(CheckRolesGateway(user))
+				}
+			}
+		}
+
 		add(CheckExpiry(tok, d.now()))
 	}
 
@@ -173,8 +202,9 @@ func Run(ctx context.Context, d Deps) []CheckResult {
 	}
 	add(CheckOIDCConfigMatch(registeredIssuer, registeredAudience, oidcCfg.Issuer, oidcCfg.Audience))
 
-	// 9. Providers — CheckProviders itself skips when nothing was
-	// requested, so the dial is only attempted when it would matter.
+	// 9. Providers — CheckProviders itself skips when nothing was requested.
+	// Reuses the connection dialed for the Roles check when available,
+	// dialing fresh only when Roles used the token-claims fallback.
 	switch {
 	case len(d.RequestedProviders) == 0:
 		add(CheckProviders(nil, nil))
@@ -183,27 +213,38 @@ func Run(ctx context.Context, d Deps) []CheckResult {
 	case d.Dial == nil:
 		add(skipResult("Providers", "not wired"))
 	default:
-		gw, closer, err := d.Dial(ctx, target, src)
-		if err != nil {
-			add(CheckResult{
-				Name: "Providers", Status: StatusFail,
-				Detail:   fmt.Sprintf("could not dial gateway: %v", err),
-				NextStep: "resolve the connectivity error above, then re-run `openshellctl doctor`",
-			})
-		} else {
-			add(runProviderCheck(ctx, gw, closer, d))
+		if !gwDialed {
+			// Roles used the token-claims fallback (dial failed or deps not
+			// wired); attempt a fresh dial now for Providers specifically.
+			// Close any closer the failed Roles dial may have returned before
+			// overwriting gwCloser with the new one.
+			if gwCloser != nil {
+				_ = gwCloser.Close()
+				gwCloser = nil
+			}
+			var err error
+			gw, gwCloser, err = d.Dial(ctx, target, src)
+			if err != nil {
+				add(CheckResult{
+					Name: "Providers", Status: StatusFail,
+					Detail:   fmt.Sprintf("could not dial gateway: %v", err),
+					NextStep: "resolve the connectivity error above, then re-run `openshellctl doctor`",
+				})
+				return results
+			}
 		}
+		add(runProviderCheck(ctx, gw, d))
 	}
 
+	if gwCloser != nil {
+		_ = gwCloser.Close()
+	}
 	return results
 }
 
-// runProviderCheck lists providers (closing the dial on every path) and
-// delegates to the pure CheckProviders — split out of Run's default case so
-// the defer/close is scoped tightly to this one check, not the whole
-// function.
-func runProviderCheck(ctx context.Context, gw gateway.Gateway, closer io.Closer, d Deps) CheckResult {
-	defer func() { _ = closer.Close() }()
+// runProviderCheck lists providers and delegates to the pure CheckProviders.
+// The caller owns gwCloser; this function only uses gw.
+func runProviderCheck(ctx context.Context, gw gateway.Gateway, d Deps) CheckResult {
 	if d.ListProviders == nil {
 		return skipResult("Providers", "not wired")
 	}

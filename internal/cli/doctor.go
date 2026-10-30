@@ -10,6 +10,8 @@ import (
 	"github.com/spf13/cobra"
 	"github.com/spf13/viper"
 
+	types "github.com/NVIDIA/OpenShell/sdk/go/openshell/v1/types"
+
 	"github.com/openshift-online/openshellctl/pkg/auth"
 	"github.com/openshift-online/openshellctl/pkg/doctor"
 	"github.com/openshift-online/openshellctl/pkg/gateway"
@@ -52,6 +54,9 @@ func newDoctorCommand() *cobra.Command {
 				},
 				Dial: func(_ context.Context, target *gatewayconfig.Target, src auth.TokenSource) (gateway.Gateway, io.Closer, error) {
 					return dialOrInjected(cmd, target, src)
+				},
+				CurrentUser: func(ctx context.Context, gw gateway.Gateway) (*types.CurrentUser, error) {
+					return gw.CurrentUser(ctx)
 				},
 				ListProviders:      sandbox.ListAllProviders,
 				LookupIP:           realLookupIP,

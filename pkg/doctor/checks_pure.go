@@ -15,8 +15,9 @@ import (
 
 // gatewayRoles mirrors auth.PreflightWarnings' role check (the gateway
 // accepts either; see pkg/auth/preflight.go) — duplicated here, not
-// imported, because CheckRoles needs its own independent pass/fail/NextStep
-// shape rather than PreflightWarnings' combined-string-slice return.
+// imported, because CheckRolesGateway/CheckRolesToken need their own
+// independent pass/fail/skip/NextStep shape rather than PreflightWarnings'
+// combined-string-slice return.
 var gatewayRoles = []string{"openshell-user", "openshell-admin"}
 
 // CheckEndpointURL confirms the resolved gateway endpoint normalizes
@@ -79,27 +80,58 @@ func CheckAudience(tok *auth.Token, wantAudience string) CheckResult {
 	}
 }
 
-// CheckRoles confirms the minted token carries a role the gateway actually
-// accepts (openshell-user or openshell-admin — authz.rs:85-101 at the pinned
-// upstream commit). Mirrors auth.PreflightWarnings' role rule: "has any role
-// at all" is not enough, since a default Keycloak human token already
-// carries default-roles-<realm>/offline_access.
-func CheckRoles(tok *auth.Token) CheckResult {
-	if tok == nil {
+// CheckRolesGateway is the authoritative Roles check: it asks the gateway
+// (the real enforcement point) which roles the caller holds, rather than
+// inspecting raw JWT claims that hsctl-managed gateways don't use. Pass when
+// user.Roles contains openshell-user or openshell-admin; fail otherwise with
+// a hint naming the real grant path.
+func CheckRolesGateway(user *types.CurrentUser) CheckResult {
+	if user == nil {
 		return CheckResult{
-			Name: "Roles", Status: StatusFail, Detail: "no token to check",
-			NextStep: "resolve the Credentials check's failure first",
+			Name: "Roles", Status: StatusFail, Detail: "no current user returned by gateway",
+			NextStep: "this is unexpected — the gateway accepted the call but returned no user profile; contact the gateway administrator",
 		}
 	}
-	if slices.ContainsFunc(gatewayRoles, func(r string) bool { return slices.Contains(tok.Roles, r) }) {
-		return CheckResult{Name: "Roles", Status: StatusPass, Detail: fmt.Sprintf("token roles %v", tok.Roles)}
+	if slices.ContainsFunc(gatewayRoles, func(r string) bool { return slices.Contains(user.Roles, r) }) {
+		return CheckResult{
+			Name:   "Roles",
+			Status: StatusPass,
+			Detail: fmt.Sprintf("gateway roles %v", user.Roles),
+		}
 	}
 	return CheckResult{
 		Name:   "Roles",
 		Status: StatusFail,
-		Detail: fmt.Sprintf("token roles %v include neither %q nor %q", tok.Roles, gatewayRoles[0], gatewayRoles[1]),
-		NextStep: "ask an administrator to grant the \"openshell-user\" realm role (\"openshell-admin\" also " +
-			"satisfies it) to this account, or use a service account client that already has it",
+		Detail: fmt.Sprintf("gateway roles %v include neither %q nor %q", user.Roles, gatewayRoles[0], gatewayRoles[1]),
+		NextStep: "register the account on this gateway via `hsctl` (gateway-side assignment is the primary " +
+			"grant path), or ask an administrator to grant the \"openshell-user\" Keycloak realm role as a " +
+			"secondary option",
+	}
+}
+
+// CheckRolesToken is the fallback Roles check used when the gateway is
+// unreachable. A positive JWT claim (openshell-user or openshell-admin present
+// in tok.Roles) is reliable and passes; a missing claim returns StatusSkip
+// (advisory only) rather than StatusFail — an hsctl-managed gateway assigns
+// roles gateway-side, so absent JWT claims don't prove permission is missing.
+// Never returns StatusFail: the HTTP/Providers checks already fail the run for
+// the honest connectivity reason.
+func CheckRolesToken(tok *auth.Token) CheckResult {
+	var roles []string
+	if tok != nil {
+		roles = tok.Roles
+	}
+	if slices.ContainsFunc(gatewayRoles, func(r string) bool { return slices.Contains(roles, r) }) {
+		return CheckResult{
+			Name:   "Roles",
+			Status: StatusPass,
+			Detail: fmt.Sprintf("token roles %v (gateway unreachable; JWT claim used as fallback)", roles),
+		}
+	}
+	return CheckResult{
+		Name:   "Roles",
+		Status: StatusSkip,
+		Detail: fmt.Sprintf("token roles %v (advisory only — gateway unreachable; hsctl-managed gateways assign roles gateway-side)", roles),
 	}
 }
 

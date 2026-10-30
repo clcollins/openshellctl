@@ -24,7 +24,7 @@ explains why that check didn't run.
 | 3 | **HTTP reachability** | `<endpoint>/auth/oidc-config` is reachable and returns well-formed JSON | DNS failed | 1 (generic) |
 | 4 | **Credentials** | A token can actually be minted (static token, client-credentials exchange, or on-disk bundle) | never — this is the check everything else depends on | 3 (auth) |
 | 5 | **Audience** | The minted token's audience includes the expected one (`--oidc-audience` → `metadata.oidc_audience` → `openshell-cli`) | Credentials failed | 3 (auth) |
-| 6 | **Roles** | The minted token carries `openshell-user` or `openshell-admin` | Credentials failed | **7 (forbidden)** |
+| 6 | **Roles** | The caller holds `openshell-user` or `openshell-admin` — **gateway-authoritative**: asks the gateway via `CurrentUser` (the real enforcement point, which hsctl-managed gateways populate gateway-side rather than in JWT claims); falls back to JWT claims only when the gateway is unreachable, and in that case a missing claim is advisory (`skip`) rather than a hard failure | Credentials failed | **7 (forbidden)** — only when the gateway confirms the role is absent; a gateway-unreachable fallback never raises 7 |
 | 7 | **Expiry** | The minted token has a known, future expiry | Credentials failed | 3 (auth) |
 | 8 | **OIDC config match** | The registered gateway's configured issuer/audience still matches what `/auth/oidc-config` actually serves (metadata drift) | nothing discovered (check 3 didn't run/failed) or nothing registered (endpoint-only invocation) | 1 (generic) |
 | 9 | **Providers** | Every `--provider`/`-f` name or type exists on the gateway | nothing requested (no `--provider`/`-f`), or Credentials failed (no token to dial with) | 2 (usage) |
@@ -40,7 +40,15 @@ Roles failing gets its own exit code (7, not 3) because it predicts a real
 command — the same distinction Feature B's `ExitForbidden` makes for an
 actual gateway response, applied preemptively here. Re-authenticating
 (`token refresh`) cannot fix it; the hint says so and names the actual fix
-(grant the role, or use a service account client that already has it).
+(register the account via `hsctl`, the gateway-side primary grant path, or
+ask an administrator to grant the `openshell-user` Keycloak realm role as a
+secondary option).
+
+Exit code 7 is raised only when the gateway itself confirms the role is
+absent. When the gateway is unreachable, the fallback to JWT claims produces
+`skip` (advisory), never exit code 7 — because hsctl-managed gateways assign
+roles gateway-side and an absent JWT claim does not prove permission is
+missing.
 
 ## Flags
 

@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -341,6 +342,177 @@ func TestCheckCredentials_NilTokenNilErr(t *testing.T) {
 	}
 	if got.NextStep == "" {
 		t.Error("expected a NextStep")
+	}
+}
+
+// TestRun_Roles_GatewayAuthoritative is the ticket's hyp2 case: the gateway
+// CurrentUser returns [openshell-user, openshell-admin] while the JWT token
+// claims are empty — Roles must pass from the gateway result, not the token.
+func TestRun_Roles_GatewayAuthoritative(t *testing.T) {
+	d := fullHappyDeps(t)
+	noRoleToken := &auth.Token{
+		Subject: "svc", Audience: []string{"openshell-cli"}, Roles: []string{},
+		Expiry: time.Now().Add(time.Hour),
+	}
+	src := &fakeTokenSource{tok: noRoleToken}
+	target := wantResolvedTarget()
+	d.ResolveAuth = func(context.Context) (auth.TokenSource, *gatewayconfig.Target, error) {
+		return src, target, nil
+	}
+	d.Dial = func(context.Context, *gatewayconfig.Target, auth.TokenSource) (gateway.Gateway, io.Closer, error) {
+		return nil, io.NopCloser(nil), nil
+	}
+	d.CurrentUser = func(_ context.Context, _ gateway.Gateway) (*types.CurrentUser, error) {
+		return &types.CurrentUser{Roles: []string{"openshell-user", "openshell-admin"}}, nil
+	}
+
+	results := Run(context.Background(), d)
+	if got := statusOf(results, "Roles"); got != StatusPass {
+		t.Errorf("Roles = %v, want pass (gateway returned openshell-user, openshell-admin; JWT claims empty)", got)
+	}
+}
+
+// TestRun_Roles_GatewayFail_ExitForbidden confirms that an empty gateway role
+// list fails Roles and that ErrChecksFailed maps it to exitForbidden (7).
+func TestRun_Roles_GatewayFail_ExitForbidden(t *testing.T) {
+	d := fullHappyDeps(t)
+	d.Dial = func(context.Context, *gatewayconfig.Target, auth.TokenSource) (gateway.Gateway, io.Closer, error) {
+		return nil, io.NopCloser(nil), nil
+	}
+	d.CurrentUser = func(_ context.Context, _ gateway.Gateway) (*types.CurrentUser, error) {
+		return &types.CurrentUser{Roles: []string{}}, nil
+	}
+
+	results := Run(context.Background(), d)
+	if got := statusOf(results, "Roles"); got != StatusFail {
+		t.Errorf("Roles = %v, want fail (gateway returned no gateway roles)", got)
+	}
+	err := &ErrChecksFailed{Results: results}
+	if got := err.ExitCode(); got != exitForbidden {
+		t.Errorf("ExitCode() = %d, want %d (exitForbidden)", got, exitForbidden)
+	}
+}
+
+// TestRun_Roles_DialError_TokenClaimsEmpty_Skips confirms a dial error with
+// empty JWT claims produces StatusSkip (advisory only), not StatusFail —
+// hsctl-managed gateways assign roles gateway-side, so absent JWT claims
+// don't prove permission is missing.
+func TestRun_Roles_DialError_TokenClaimsEmpty_Skips(t *testing.T) {
+	d := fullHappyDeps(t)
+	noRoleToken := &auth.Token{
+		Subject: "svc", Audience: []string{"openshell-cli"}, Roles: []string{},
+		Expiry: time.Now().Add(time.Hour),
+	}
+	src := &fakeTokenSource{tok: noRoleToken}
+	target := wantResolvedTarget()
+	d.ResolveAuth = func(context.Context) (auth.TokenSource, *gatewayconfig.Target, error) {
+		return src, target, nil
+	}
+	d.Dial = func(context.Context, *gatewayconfig.Target, auth.TokenSource) (gateway.Gateway, io.Closer, error) {
+		return nil, nil, errors.New("gateway unreachable")
+	}
+	d.CurrentUser = func(_ context.Context, _ gateway.Gateway) (*types.CurrentUser, error) {
+		t.Error("CurrentUser must not be called when Dial fails")
+		return nil, nil
+	}
+
+	results := Run(context.Background(), d)
+	if got := statusOf(results, "Roles"); got != StatusSkip {
+		t.Errorf("Roles = %v, want skip (dial failed, JWT claims empty — advisory only)", got)
+	}
+}
+
+// TestRun_Roles_DialError_TokenClaimsPresent_Passes confirms the reliable
+// positive fallback: if the gateway is unreachable but JWT has openshell-user,
+// CheckRolesToken passes (a positive claim is reliable even without the gateway).
+func TestRun_Roles_DialError_TokenClaimsPresent_Passes(t *testing.T) {
+	d := fullHappyDeps(t) // token has Roles: []string{"openshell-user"}
+	d.Dial = func(context.Context, *gatewayconfig.Target, auth.TokenSource) (gateway.Gateway, io.Closer, error) {
+		return nil, nil, errors.New("gateway unreachable")
+	}
+	d.CurrentUser = func(_ context.Context, _ gateway.Gateway) (*types.CurrentUser, error) {
+		t.Error("CurrentUser must not be called when Dial fails")
+		return nil, nil
+	}
+
+	results := Run(context.Background(), d)
+	if got := statusOf(results, "Roles"); got != StatusPass {
+		t.Errorf("Roles = %v, want pass (dial failed but JWT has openshell-user)", got)
+	}
+}
+
+// TestRun_Roles_CurrentUserError_FallsBackToToken confirms that when Dial
+// succeeds but CurrentUser returns an error, Run falls back to CheckRolesToken
+// rather than failing the check outright — the gateway may accept the call
+// but not yet have the caller's profile indexed.
+func TestRun_Roles_CurrentUserError_FallsBackToToken(t *testing.T) {
+	// Subtest A: token has no roles → skip (advisory).
+	t.Run("token claims empty -> skip", func(t *testing.T) {
+		d := fullHappyDeps(t)
+		noRoleToken := &auth.Token{
+			Subject: "svc", Audience: []string{"openshell-cli"}, Roles: []string{},
+			Expiry: time.Now().Add(time.Hour),
+		}
+		src := &fakeTokenSource{tok: noRoleToken}
+		target := wantResolvedTarget()
+		d.ResolveAuth = func(context.Context) (auth.TokenSource, *gatewayconfig.Target, error) {
+			return src, target, nil
+		}
+		d.Dial = func(context.Context, *gatewayconfig.Target, auth.TokenSource) (gateway.Gateway, io.Closer, error) {
+			return nil, io.NopCloser(nil), nil
+		}
+		d.CurrentUser = func(_ context.Context, _ gateway.Gateway) (*types.CurrentUser, error) {
+			return nil, errors.New("rpc: not found")
+		}
+		results := Run(context.Background(), d)
+		if got := statusOf(results, "Roles"); got != StatusSkip {
+			t.Errorf("Roles = %v, want skip (CurrentUser errored, JWT claims empty)", got)
+		}
+	})
+
+	// Subtest B: token has openshell-user → pass via token fallback.
+	t.Run("token claims present -> pass", func(t *testing.T) {
+		d := fullHappyDeps(t) // token has Roles: []string{"openshell-user"}
+		d.Dial = func(context.Context, *gatewayconfig.Target, auth.TokenSource) (gateway.Gateway, io.Closer, error) {
+			return nil, io.NopCloser(nil), nil
+		}
+		d.CurrentUser = func(_ context.Context, _ gateway.Gateway) (*types.CurrentUser, error) {
+			return nil, errors.New("rpc: not found")
+		}
+		results := Run(context.Background(), d)
+		if got := statusOf(results, "Roles"); got != StatusPass {
+			t.Errorf("Roles = %v, want pass (CurrentUser errored, JWT has openshell-user)", got)
+		}
+	})
+}
+
+// TestRun_RolesAndProviders_SharedDial confirms the single-dial guarantee:
+// when Roles dials successfully (both Dial and CurrentUser wired), Providers
+// reuses the same connection rather than opening a second one.
+func TestRun_RolesAndProviders_SharedDial(t *testing.T) {
+	d := fullHappyDeps(t)
+	d.RequestedProviders = []string{"my-openai"}
+	dialCount := 0
+	d.Dial = func(context.Context, *gatewayconfig.Target, auth.TokenSource) (gateway.Gateway, io.Closer, error) {
+		dialCount++
+		return nil, io.NopCloser(nil), nil
+	}
+	d.CurrentUser = func(_ context.Context, _ gateway.Gateway) (*types.CurrentUser, error) {
+		return &types.CurrentUser{Roles: []string{"openshell-user"}}, nil
+	}
+	d.ListProviders = func(_ context.Context, _ gateway.Gateway, _ string) ([]*types.Provider, error) {
+		return []*types.Provider{{Name: "my-openai", Type: "openai"}}, nil
+	}
+
+	results := Run(context.Background(), d)
+	if dialCount != 1 {
+		t.Errorf("Dial called %d times, want exactly 1 (shared between Roles and Providers)", dialCount)
+	}
+	if got := statusOf(results, "Roles"); got != StatusPass {
+		t.Errorf("Roles = %v, want pass", got)
+	}
+	if got := statusOf(results, "Providers"); got != StatusPass {
+		t.Errorf("Providers = %v, want pass", got)
 	}
 }
 

@@ -66,26 +66,104 @@ func TestCheckAudience(t *testing.T) {
 	}
 }
 
-func TestCheckRoles(t *testing.T) {
+func TestCheckRolesGateway(t *testing.T) {
+	tests := []struct {
+		name       string
+		user       *types.CurrentUser
+		wantStatus Status
+		wantSub    string
+	}{
+		{
+			"gateway reports openshell-user -> pass",
+			&types.CurrentUser{Roles: []string{"openshell-user", "openshell-admin"}},
+			StatusPass, "openshell-user",
+		},
+		{
+			"gateway reports only openshell-user -> pass",
+			&types.CurrentUser{Roles: []string{"openshell-user"}},
+			StatusPass, "openshell-user",
+		},
+		{
+			"gateway reports only openshell-admin -> pass",
+			&types.CurrentUser{Roles: []string{"openshell-admin"}},
+			StatusPass, "openshell-admin",
+		},
+		{
+			"gateway reports no gateway roles -> fail",
+			&types.CurrentUser{Roles: []string{}},
+			StatusFail, "gateway roles",
+		},
+		{
+			"gateway reports nil roles -> fail",
+			&types.CurrentUser{Roles: nil},
+			StatusFail, "gateway roles",
+		},
+		{
+			"nil user -> fail",
+			nil,
+			StatusFail, "no current user",
+		},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := CheckRolesGateway(tt.user)
+			if got.Status != tt.wantStatus {
+				t.Errorf("Status = %v, want %v (detail: %s)", got.Status, tt.wantStatus, got.Detail)
+			}
+			if !contains(got.Detail, tt.wantSub) {
+				t.Errorf("Detail = %q, want it to contain %q", got.Detail, tt.wantSub)
+			}
+			if tt.wantStatus == StatusFail && got.NextStep == "" {
+				t.Error("expected a NextStep for a failed check")
+			}
+		})
+	}
+}
+
+func TestCheckRolesToken(t *testing.T) {
 	tests := []struct {
 		name       string
 		tok        *auth.Token
 		wantStatus Status
+		wantSub    string
 	}{
-		{"has openshell-user -> pass", &auth.Token{Roles: []string{"openshell-user"}}, StatusPass},
-		{"has openshell-admin -> pass", &auth.Token{Roles: []string{"openshell-admin"}}, StatusPass},
-		{"default keycloak roles only -> fail", &auth.Token{Roles: []string{"default-roles-rosa", "offline_access"}}, StatusFail},
-		{"no roles at all -> fail", &auth.Token{Roles: nil}, StatusFail},
-		{"nil token -> fail", nil, StatusFail},
+		{
+			"claims have openshell-user -> pass (reliable positive)",
+			&auth.Token{Roles: []string{"openshell-user"}},
+			StatusPass, "openshell-user",
+		},
+		{
+			"claims have openshell-admin -> pass (reliable positive)",
+			&auth.Token{Roles: []string{"openshell-admin"}},
+			StatusPass, "openshell-admin",
+		},
+		{
+			"claims have no gateway roles -> skip (advisory only)",
+			&auth.Token{Roles: []string{"default-roles-rosa", "offline_access"}},
+			StatusSkip, "advisory only",
+		},
+		{
+			"claims empty -> skip (advisory only, exact hyp2 case)",
+			&auth.Token{Roles: []string{}},
+			StatusSkip, "advisory only",
+		},
+		{
+			"nil token -> skip (advisory only)",
+			nil,
+			StatusSkip, "advisory only",
+		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := CheckRoles(tt.tok)
+			got := CheckRolesToken(tt.tok)
 			if got.Status != tt.wantStatus {
 				t.Errorf("Status = %v, want %v (detail: %s)", got.Status, tt.wantStatus, got.Detail)
 			}
-			if tt.wantStatus == StatusFail && got.NextStep == "" {
-				t.Error("expected a NextStep for a failed check")
+			if !contains(got.Detail, tt.wantSub) {
+				t.Errorf("Detail = %q, want it to contain %q", got.Detail, tt.wantSub)
+			}
+			if got.Status == StatusFail {
+				t.Error("CheckRolesToken must never StatusFail — gateway-unreachable fallback")
 			}
 		})
 	}
