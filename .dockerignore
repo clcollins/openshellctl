@@ -1,0 +1,8 @@
+# Exclude large / irrelevant directories from the container build context.
+# Applies to both build/Containerfile (the release image) and
+# test/Containerfile.e2e (the E2E UX test image).
+.git
+dist/
+.claude/
+coverage.out
+bin/
