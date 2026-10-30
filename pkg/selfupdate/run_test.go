@@ -70,9 +70,15 @@ func testReleaseServer(t *testing.T, tag, goos, goarch string) (Release, *httpte
 		hdr := &tar.Header{Name: "openshellctl", Typeflag: tar.TypeReg, Size: int64(len(content)), Mode: 0o755}
 		_ = tw.WriteHeader(hdr)
 		_, _ = tw.Write(content)
-		tw.Close()
-		gw.Close()
-		tmpF.Close()
+		if err := tw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := gw.Close(); err != nil {
+			t.Fatal(err)
+		}
+		if err := tmpF.Close(); err != nil {
+			t.Fatal(err)
+		}
 		buf, _ = os.ReadFile(tmpF.Name())
 		archiveBuf = buf
 	}

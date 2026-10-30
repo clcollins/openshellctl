@@ -28,7 +28,7 @@ func TestDownloadAndVerify_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	defer os.Remove(dst)
+	defer func() { _ = os.Remove(dst) }()
 
 	got, err := os.ReadFile(dst)
 	if err != nil {

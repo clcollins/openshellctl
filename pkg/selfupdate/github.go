@@ -90,7 +90,7 @@ func (f *GitHubFetcher) get(ctx context.Context, url string, out interface{}) er
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	switch resp.StatusCode {
 	case http.StatusNotFound:

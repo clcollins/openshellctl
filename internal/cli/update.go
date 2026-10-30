@@ -90,27 +90,27 @@ also consider pre-releases, or --version to install a specific tag.
 
 			switch {
 			case result.AlreadyAtTarget:
-				fmt.Fprintf(cmd.ErrOrStderr(), "openshellctl is already at %s\n", result.TargetTag)
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "openshellctl is already at %s\n", result.TargetTag)
 			case result.Ahead:
-				fmt.Fprintf(cmd.ErrOrStderr(), "openshellctl %s is ahead of the latest release (%s)\n",
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "openshellctl %s is ahead of the latest release (%s)\n",
 					result.CurrentTag, result.TargetTag)
 			case checkOnly:
 				if result.CurrentTag != "" {
-					fmt.Fprintf(cmd.ErrOrStderr(), "openshellctl %s → %s available\n", result.CurrentTag, result.TargetTag)
+					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "openshellctl %s → %s available\n", result.CurrentTag, result.TargetTag)
 				} else {
-					fmt.Fprintf(cmd.ErrOrStderr(), "openshellctl update available: %s\n", result.TargetTag)
+					_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "openshellctl update available: %s\n", result.TargetTag)
 				}
 			case result.Downgrade:
-				fmt.Fprintf(cmd.ErrOrStderr(), "downgraded openshellctl %s → %s (%s)\n",
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "downgraded openshellctl %s → %s (%s)\n",
 					result.CurrentTag, result.TargetTag, opts.ExePath)
 			default:
 				var fromStr string
 				if result.CurrentTag != "" {
 					fromStr = result.CurrentTag + " → "
 				}
-				fmt.Fprintf(cmd.ErrOrStderr(), "updated openshellctl %s%s (%s)\n",
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "updated openshellctl %s%s (%s)\n",
 					fromStr, result.TargetTag, opts.ExePath)
-				fmt.Fprintf(cmd.ErrOrStderr(), "note: release signatures are not yet verified (checksum only)\n")
+				_, _ = fmt.Fprintf(cmd.ErrOrStderr(), "note: release signatures are not yet verified (checksum only)\n")
 			}
 
 			// Refresh the notice cache so the next command doesn't re-announce

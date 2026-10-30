@@ -26,13 +26,13 @@ func ExtractBinary(archivePath, dst string, maxSize int64) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	gr, err := gzip.NewReader(f)
 	if err != nil {
 		return fmt.Errorf("opening gzip: %w", err)
 	}
-	defer gr.Close()
+	defer func() { _ = gr.Close() }()
 
 	tr := tar.NewReader(gr)
 	for {
@@ -59,15 +59,15 @@ func ExtractBinary(archivePath, dst string, maxSize int64) error {
 		n, copyErr := io.Copy(out, limited)
 		closeErr := out.Close()
 		if copyErr != nil {
-			os.Remove(dst)
+			_ = os.Remove(dst)
 			return fmt.Errorf("extracting binary: %w", copyErr)
 		}
 		if closeErr != nil {
-			os.Remove(dst)
+			_ = os.Remove(dst)
 			return closeErr
 		}
 		if n > maxSize {
-			os.Remove(dst)
+			_ = os.Remove(dst)
 			return fmt.Errorf("binary entry exceeds size limit of %d bytes", maxSize)
 		}
 		return nil

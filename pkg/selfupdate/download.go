@@ -32,8 +32,8 @@ func DownloadAndVerify(ctx context.Context, client *http.Client, url, dir, wantH
 	tmpPath := tmp.Name()
 
 	cleanup := func() {
-		tmp.Close()
-		os.Remove(tmpPath)
+		_ = tmp.Close()
+		_ = os.Remove(tmpPath)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
@@ -46,7 +46,7 @@ func DownloadAndVerify(ctx context.Context, client *http.Client, url, dir, wantH
 		cleanup()
 		return "", err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		cleanup()
@@ -65,13 +65,13 @@ func DownloadAndVerify(ctx context.Context, client *http.Client, url, dir, wantH
 		return "", fmt.Errorf("download from %s exceeded size limit of %d bytes", url, maxBytes)
 	}
 	if err := tmp.Close(); err != nil {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return "", err
 	}
 
 	gotHex := hex.EncodeToString(h.Sum(nil))
 	if gotHex != strings.ToLower(wantHex) {
-		os.Remove(tmpPath)
+		_ = os.Remove(tmpPath)
 		return "", &ErrChecksumMismatch{Want: wantHex, Got: gotHex}
 	}
 
